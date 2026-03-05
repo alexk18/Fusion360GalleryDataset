@@ -10,6 +10,7 @@ import os
 import sys
 import importlib
 import math
+import time
 
 from .command_base import CommandBase
 
@@ -32,6 +33,37 @@ class CommandReconstruct(CommandBase):
         """Reconstruct a design from the provided json data"""
         importer = SketchExtrudeImporter(data)
         importer.reconstruct(
+            reconstruction=self.design_state.reconstruction.component
+        )
+        return self.runner.return_success()
+
+    def reconstruct_stepwise(self, data):
+        """Reconstruct design incrementally with delay between extrudes.
+
+        Expects either:
+          - {"json_data": <reconstruction_json>, "delay": <seconds>}
+          - or the reconstruction json directly as data
+        """
+        if data is None:
+            return self.runner.return_failure("reconstruct_stepwise data not specified")
+
+        json_data = data.get("json_data") if isinstance(data, dict) and "json_data" in data else data
+        delay = 0.8
+        if isinstance(data, dict) and "delay" in data:
+            try:
+                delay = max(0.0, float(data["delay"]))
+            except Exception:
+                delay = 0.8
+
+        def reconstruct_cb(cb_data):
+            # Slow down at extrude boundaries for clear visual progression.
+            if "extrude" in cb_data:
+                adsk.doEvents()
+                time.sleep(delay)
+
+        importer = SketchExtrudeImporter(json_data)
+        importer.reconstruct(
+            reconstruct_cb=reconstruct_cb,
             reconstruction=self.design_state.reconstruction.component
         )
         return self.runner.return_success()

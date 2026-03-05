@@ -5,13 +5,17 @@ import math
 
 def get_bounding_box(entity):
     """Get the bounding box of an entity"""
+    # Part Design root wrapper (_RootComponentAsReconstruction) or any object with bRepBodies but no boundingBox
+    if hasattr(entity, '_root'):
+        return get_brep_bodies_bounding_box(entity.bRepBodies)
+    if hasattr(entity, 'bRepBodies') and not hasattr(entity, 'boundingBox'):
+        return get_brep_bodies_bounding_box(entity.bRepBodies)
     if isinstance(entity, adsk.fusion.Component):
         # Component bounding box calculation is unreliable
         # so do it ourselves from the bodies
         body_bb = get_brep_bodies_bounding_box(entity.bRepBodies)
         return body_bb
-    else:
-        return entity.boundingBox
+    return entity.boundingBox
 
 
 def get_brep_bodies_bounding_box(bodies):
@@ -266,8 +270,11 @@ def get_intersect_volume(bodies_one, bodies_two):
 def __get_bodies_from_entity(entity):
     """Return a collection of bodies from a Component, Instance, or BRepBody"""
     bodies = []
-    if (isinstance(entity, adsk.fusion.Component) or
-       isinstance(entity, adsk.fusion.Occurrence)):
+    if hasattr(entity, '_root'):
+        # Part Design root wrapper (_RootComponentAsReconstruction)
+        bodies = entity.bRepBodies
+    elif (isinstance(entity, adsk.fusion.Component) or
+          isinstance(entity, adsk.fusion.Occurrence)):
         bodies = entity.bRepBodies
     elif isinstance(entity, adsk.fusion.BRepBody):
         bodies = [entity]

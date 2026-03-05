@@ -89,6 +89,8 @@ def add_sketch(client, sketch, sketch_id, profiles_used):
     r = client.add_sketch(sketch_plane)
     # Get the sketch name back
     response_json = r.json()
+    if r.status_code != 200 or "data" not in response_json:
+        raise RuntimeError(f"add_sketch failed: [{r.status_code}] {response_json.get('message', response_json)}")
     sketch_name = response_json["data"]["sketch_name"]
     profile_ids = add_profiles(client, sketch_name, sketch, profiles_used)
     return {
@@ -121,8 +123,9 @@ def add_profiles(client, sketch_name, sketch, profiles_used):
                     # due to the way Fusion saves out data from designs
                     r = client.add_line(sketch_name, curve["start_point"], curve["end_point"], transform)
                     response_json = r.json()
+                    if r.status_code != 200 or "data" not in response_json:
+                        raise RuntimeError(f"add_line failed: [{r.status_code}] {response_json.get('message', response_json)}")
             # Look at the response and add profiles to the lookup dict
-            # mapping between the original uuids and the profiles
             response_data = response_json["data"]
             for re_profile in response_data["profiles"]:
                 profile_ids[original_profile_id] = re_profile
@@ -146,6 +149,9 @@ def add_extrude_feature(client, extrude_feature, extrude_feature_id, sketches):
     # Add the extrude
     r = client.add_extrude(sketch_name, profile_id, distance, operation)
     response_json = r.json()
+    if r.status_code != 200 or "data" not in response_json:
+        print(f"Error on extrude {extrude_feature_id}: [{r.status_code}] {response_json.get('message', response_json)}")
+        return
     response_data = response_json["data"]
     # response_data contains a lot of information about:
     # - face adjacency graph: response_data["graph"]

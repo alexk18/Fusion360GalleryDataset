@@ -8,6 +8,30 @@ import adsk.core
 import adsk.fusion
 
 
+class _RootComponentAsReconstruction:
+    """Wraps root Component to mimic Occurrence API for Part Design (single-component) documents."""
+
+    def __init__(self, root_component):
+        self._root = root_component
+
+    @property
+    def component(self):
+        return self._root
+
+    @property
+    def bRepBodies(self):
+        return self._root.bRepBodies
+
+    def activate(self):
+        # Component (root) has no activate() in Fusion API; only Occurrence does. No-op for Part Design.
+        pass
+
+    def deleteMe(self):
+        # Part Design root cannot be deleted; remove all bodies instead
+        for i in range(self._root.bRepBodies.count - 1, -1, -1):
+            self._root.bRepBodies.item(i).deleteMe()
+
+
 class DesignState():
 
     def __init__(self, runner):
@@ -18,11 +42,12 @@ class DesignState():
         self.command_objects = None
 
         # Setup the target and reconstruction design components
-        # the target design gets set later if required
         self.target = None
-        # The reconstruction design we always setup
         self.reconstruction = None
-        self.setup_reconstruction()
+        if self.design is not None:
+            self.setup_reconstruction()
+        else:
+            raise RuntimeError("No active design. Open or create a design first, then run the add-in again.")
 
     def set_logger(self, logger):
         self.logger = logger
@@ -32,7 +57,11 @@ class DesignState():
         self.command_objects = command_objects
 
     def refresh(self):
-        """Refresh the active viewport"""
+        """Refresh the active viewport and fit view to show all geometry"""
+        try:
+            self.app.activeViewport.fit()
+        except Exception:
+            pass
         self.app.activeViewport.refresh()
         return self.runner.return_success()
 
@@ -47,17 +76,30 @@ class DesignState():
                 obj.clear()
         self.target = None
         self.design = adsk.fusion.Design.cast(self.app.activeProduct)
-        self.setup_reconstruction()
+        if self.design is not None:
+            self.setup_reconstruction()
+        else:
+            self.reconstruction = None
         return self.runner.return_success()
 
     def setup_reconstruction(self):
-        """Create the reconstruction component"""
-        self.reconstruction = self.design.rootComponent.occurrences.addNewComponent(
-            adsk.core.Matrix3D.create()
-        )
-        self.reconstruction.activate()
-        name = f"Reconstruction_{self.reconstruction.component.name}"
-        self.reconstruction.component.name = name
+        """Create the reconstruction component (or use root in Part Design)."""
+        if self.design is None:
+            raise RuntimeError("No active design. Open or create a design first.")
+        try:
+            self.reconstruction = self.design.rootComponent.occurrences.addNewComponent(
+                adsk.core.Matrix3D.create()
+            )
+            self.reconstruction.activate()
+            name = f"Reconstruction_{self.reconstruction.component.name}"
+            self.reconstruction.component.name = name
+        except RuntimeError as ex:
+            if "Part Design documents can only contain one component" in str(ex):
+                # Part Design: use root component as reconstruction (no extra component allowed)
+                self.reconstruction = _RootComponentAsReconstruction(self.design.rootComponent)
+                self.reconstruction.activate()
+            else:
+                raise
         adsk.doEvents()
 
     def clear_reconstruction(self):

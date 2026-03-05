@@ -90,7 +90,9 @@ class FaceReconstructor():
         extrude_input = extrudes.createInput(start_face, operation)
         extent = adsk.fusion.ToEntityExtentDefinition.create(end_face, False)
         extrude_input.setOneSideExtent(extent, adsk.fusion.ExtentDirections.PositiveExtentDirection)
-        extrude_input.creationOccurrence = self.reconstruction
+        # Part Design root wrapper has no real occurrence; only set when we have a real Occurrence
+        if not getattr(self.reconstruction, '_root', None):
+            extrude_input.creationOccurrence = self.reconstruction
         tools = []
         for body in self.reconstruction.bRepBodies:
             tools.append(body)

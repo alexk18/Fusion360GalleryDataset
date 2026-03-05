@@ -57,6 +57,8 @@ class CommandRunner():
                 result = self.design_state.refresh()
             elif command == "reconstruct":
                 result = self.reconstruct.reconstruct(data)
+            elif command == "reconstruct_stepwise":
+                result = self.reconstruct.reconstruct_stepwise(data)
             elif command == "reconstruct_sketch":
                 result = self.reconstruct.reconstruct_sketch(data)
             elif command == "reconstruct_profile":

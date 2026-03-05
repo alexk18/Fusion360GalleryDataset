@@ -30,7 +30,7 @@ class CommandSketchExtrusion(CommandBase):
         """Add a sketch to the existing design"""
         if data is None or "sketch_plane" not in data:
             return self.runner.return_failure("sketch_plane not specified")
-        sketch_plane = match.sketch_plane(data["sketch_plane"])
+        sketch_plane = self.__resolve_sketch_plane(data["sketch_plane"])
         if sketch_plane is None:
             return self.runner.return_failure("sketch_plane could not be found")
         sketches = self.design_state.reconstruction.component.sketches
@@ -40,6 +40,34 @@ class CommandSketchExtrusion(CommandBase):
             "sketch_id": sketch_uuid,
             "sketch_name": sketch.name
         })
+
+    def __resolve_sketch_plane(self, sketch_plane_data):
+        """Resolve base and offset construction planes (e.g. 'XY@12.5')."""
+        component = self.design_state.reconstruction.component
+        base_map = {
+            "xy": component.xYConstructionPlane,
+            "xz": component.xZConstructionPlane,
+            "yz": component.yZConstructionPlane,
+        }
+        if isinstance(sketch_plane_data, str) and "@" in sketch_plane_data:
+            base_name, offset_raw = sketch_plane_data.split("@", 1)
+            base = base_map.get(base_name.strip().lower())
+            if base is None:
+                return None
+            try:
+                offset = float(offset_raw.strip())
+            except Exception:
+                return None
+            planes = component.constructionPlanes
+            plane_input = planes.createInput()
+            offset_value = adsk.core.ValueInput.createByReal(offset)
+            plane_input.setByOffset(base, offset_value)
+            return planes.add(plane_input)
+        if isinstance(sketch_plane_data, str):
+            direct = base_map.get(sketch_plane_data.strip().lower())
+            if direct is not None:
+                return direct
+        return match.sketch_plane(sketch_plane_data)
 
     def add_point(self, data):
         """Add a point to create a new sequential line in the given sketch"""

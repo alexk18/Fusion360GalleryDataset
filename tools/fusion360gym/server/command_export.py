@@ -179,7 +179,7 @@ class CommandExport(CommandBase):
         graph = regraph_graph.generate_from_bodies(
             self.design_state.reconstruction.bRepBodies
         )
-        bbox = geometry.get_bounding_box(self.design_state.reconstruction)
+        bbox = geometry.get_bounding_box(self.design_state.reconstruction.component)
         bbox_data = serialize.bounding_box3d(bbox)
         return {
             "graph": graph,

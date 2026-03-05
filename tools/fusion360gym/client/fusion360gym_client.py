@@ -37,9 +37,11 @@ class Fusion360GymClient():
         }
         if data is not None:
             command_data["data"] = data
+        body = json.dumps(command_data)
         return requests.post(
             url=self.url,
-            data=json.dumps(command_data),
+            data=body,
+            headers={"Content-Type": "application/json"},
             stream=stream
         )
 
@@ -57,6 +59,24 @@ class Fusion360GymClient():
             json_data = json.load(file_handle)
         return self.send_command("reconstruct", json_data)
 
+    def reconstruct_stepwise(self, file, delay=0.8):
+        """Reconstruct a design incrementally with a delay between extrudes.
+
+        This keeps the current Fusion session and lets users visually observe
+        each construction step instead of getting a final model instantly.
+        """
+        if isinstance(file, str):
+            file = Path(file)
+        if not file.exists():
+            return self.__return_error("JSON file does not exist")
+        with open(file, encoding="utf8") as file_handle:
+            json_data = json.load(file_handle)
+        command_data = {
+            "json_data": json_data,
+            "delay": float(delay),
+        }
+        return self.send_command("reconstruct_stepwise", data=command_data)
+
     def reconstruct_sketch(self, sketch_data, sketch_plane=None,
                            scale=None, translate=None, rotate=None):
         """Reconstruct a sketch from the provided json data and sketch name"""
@@ -70,8 +90,10 @@ class Fusion360GymClient():
             is_dict = isinstance(sketch_plane, dict)
             if not is_str and not is_int and not is_dict:
                 return self.__return_error(f"Invalid sketch_plane value")
-            if is_str and sketch_plane not in self.construction_planes:
-                return self.__return_error(f"Invalid sketch_plane value")
+            if is_str:
+                base = sketch_plane.split("@", 1)[0].strip().upper()
+                if base not in self.construction_planes:
+                    return self.__return_error(f"Invalid sketch_plane value")
             if is_dict:
                 error = self.__check_vector3d(sketch_plane)
                 if error is not None:
@@ -228,6 +250,10 @@ class Fusion360GymClient():
         is_dict = isinstance(sketch_plane, dict)
         if not is_str and not is_int and not is_dict:
             return self.__return_error(f"Invalid sketch_plane value")
+        if is_str:
+            base = sketch_plane.split("@", 1)[0].strip().upper()
+            if base not in self.construction_planes:
+                return self.__return_error(f"Invalid sketch_plane value")
         if is_dict:
             if ("x" not in sketch_plane or
                     "y" not in sketch_plane or

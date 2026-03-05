@@ -1,0 +1,1467 @@
+[
+  {
+    "keywords": [
+      "56045"
+    ],
+    "description": "56045 (21 parts, 9x13x2 cm)",
+    "source_file": "56045_d9d572d5_0000.json",
+    "parts": [
+      {
+        "x_min": -4.5,
+        "x_max": 4.5,
+        "y_min": -6.5,
+        "y_max": 6.5,
+        "z_min": 0,
+        "z_max": 1.0,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -4.5,
+        "x_max": 4.5,
+        "y_min": -6.5,
+        "y_max": 6.5,
+        "z_min": -0.5,
+        "z_max": 0,
+        "name": "Body 2 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -0.09,
+        "x_max": 0.06,
+        "y_min": 4.75,
+        "y_max": 5.75,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 3 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 3.13,
+        "x_max": 4.33,
+        "y_min": -0.08,
+        "y_max": 0.07,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 4 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -4.37,
+        "x_max": -3.07,
+        "y_min": -0.08,
+        "y_max": 0.08,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 5 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.09,
+        "x_max": 0.06,
+        "y_min": -5.81,
+        "y_max": -4.61,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 6 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 2.2,
+        "x_max": 2.83,
+        "y_min": 4.13,
+        "y_max": 5.07,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 7 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 2.9,
+        "x_max": 3.84,
+        "y_min": 2.17,
+        "y_max": 2.8,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 8 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 2.93,
+        "x_max": 3.87,
+        "y_min": -2.53,
+        "y_max": -1.9,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 9 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 1.7,
+        "x_max": 2.33,
+        "y_min": -4.67,
+        "y_max": -3.73,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 10 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -3.47,
+        "x_max": -2.53,
+        "y_min": 2.0,
+        "y_max": 2.63,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 11 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -2.5,
+        "x_max": -1.87,
+        "y_min": 3.73,
+        "y_max": 4.68,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 12 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -3.3,
+        "x_max": -2.49,
+        "y_min": -2.51,
+        "y_max": -1.69,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 13 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -2.3,
+        "x_max": -1.54,
+        "y_min": -4.4,
+        "y_max": -3.53,
+        "z_min": 0,
+        "z_max": 0.05,
+        "name": "Body 14 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 0.0,
+        "x_max": 2.0,
+        "y_min": -0.1,
+        "y_max": 0.1,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 15 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 2.0,
+        "x_max": 2.5,
+        "y_min": -0.1,
+        "y_max": 0.1,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 16 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.1,
+        "x_max": 0.1,
+        "y_min": -0.0,
+        "y_max": 3.5,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 17 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.1,
+        "x_max": 0.1,
+        "y_min": 3.5,
+        "y_max": 4.0,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 18 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -1.98,
+        "x_max": 0.0,
+        "y_min": -2.36,
+        "y_max": 0.0,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 19 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -2.06,
+        "x_max": -1.9,
+        "y_min": -2.48,
+        "y_max": -2.3,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 20 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 0.1,
+        "x_max": 0.2,
+        "y_min": 0.1,
+        "y_max": 0.2,
+        "z_min": 0,
+        "z_max": 0.1,
+        "name": "Body 21 (JoinFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 834,
+      "timeline_count": 42,
+      "sketch_count": 21,
+      "extrude_count": 21,
+      "face_count": 87,
+      "body_count": 1,
+      "part_count": 21,
+      "operations": [
+        "CutFeatureOperation",
+        "JoinFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 923.2
+    }
+  },
+  {
+    "keywords": [
+      "63539"
+    ],
+    "description": "63539 (8 parts, 4x19x12 cm)",
+    "source_file": "63539_dd7fddaa_0005.json",
+    "parts": [
+      {
+        "x_min": 0,
+        "x_max": 0.8,
+        "y_min": -0.8,
+        "y_max": 10.0,
+        "z_min": -11.2,
+        "z_max": 1.2,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -3.0,
+        "x_max": 0,
+        "y_min": -8.51,
+        "y_max": -5.46,
+        "z_min": -4.38,
+        "z_max": -1.07,
+        "name": "Body 2 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -0.4,
+        "x_max": 0,
+        "y_min": -8.51,
+        "y_max": -5.29,
+        "z_min": -9.27,
+        "z_max": -5.07,
+        "name": "Body 3 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -1.5,
+        "x_max": 0,
+        "y_min": -7.0,
+        "y_max": -1.9,
+        "z_min": -5.35,
+        "z_max": -5.2,
+        "name": "Body 4 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -2.0,
+        "x_max": 0,
+        "y_min": -8.32,
+        "y_max": -8.07,
+        "z_min": -5.35,
+        "z_max": -5.23,
+        "name": "Body 5 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -1.7,
+        "x_max": 0,
+        "y_min": -8.17,
+        "y_max": -5.64,
+        "z_min": -7.16,
+        "z_max": -6.98,
+        "name": "Body 6 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -3.0,
+        "x_max": 0,
+        "y_min": -1.43,
+        "y_max": -1.18,
+        "z_min": -5.8,
+        "z_max": -5.65,
+        "name": "Body 7 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -0.5,
+        "x_max": 0,
+        "y_min": -5.25,
+        "y_max": -4.65,
+        "z_min": -7.71,
+        "z_max": -7.59,
+        "name": "Body 8 (CutFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 747,
+      "timeline_count": 20,
+      "sketch_count": 10,
+      "extrude_count": 10,
+      "face_count": 224,
+      "body_count": 4,
+      "part_count": 8,
+      "operations": [
+        "CutFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 817.4
+    }
+  },
+  {
+    "keywords": [
+      "52443"
+    ],
+    "description": "52443 (4 parts, 5x0x3 cm)",
+    "source_file": "52443_085efc00_0014.json",
+    "parts": [
+      {
+        "x_min": -2.3,
+        "x_max": 2.3,
+        "y_min": 0,
+        "y_max": 0.1,
+        "z_min": -1.6,
+        "z_max": 1.6,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 1.1,
+        "x_max": 1.3,
+        "y_min": -0.05,
+        "y_max": 0,
+        "z_min": -0.6,
+        "z_max": -0.1,
+        "name": "Body 2 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 0.8,
+        "x_max": 1.0,
+        "y_min": -0.05,
+        "y_max": 0,
+        "z_min": -1.3,
+        "z_max": -0.8,
+        "name": "Body 3 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 1.25,
+        "x_max": 2.06,
+        "y_min": -0.05,
+        "y_max": 0,
+        "z_min": 0.24,
+        "z_max": 0.54,
+        "name": "Body 4 (NewBodyFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 543,
+      "timeline_count": 7,
+      "sketch_count": 3,
+      "extrude_count": 4,
+      "face_count": 280,
+      "body_count": 35,
+      "part_count": 4,
+      "operations": [
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 689.5
+    }
+  },
+  {
+    "keywords": [
+      "65380"
+    ],
+    "description": "65380 (8 parts, 13x1x3 cm)",
+    "source_file": "65380_efaa94f1_0000.json",
+    "parts": [
+      {
+        "x_min": -0.9,
+        "x_max": 2.5,
+        "y_min": 0,
+        "y_max": 0.3,
+        "z_min": -1.55,
+        "z_max": 0.0,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -1.8,
+        "x_max": -0.21,
+        "y_min": 0,
+        "y_max": 0.6,
+        "z_min": 0.3,
+        "z_max": 1.26,
+        "name": "Body 2 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -2.5,
+        "x_max": -1.0,
+        "y_min": -0.03,
+        "y_max": 0,
+        "z_min": 0.0,
+        "z_max": 0.8,
+        "name": "Body 3 (CutFeatureOperation)"
+      },
+      {
+        "x_min": 0.49,
+        "x_max": 1.2,
+        "y_min": 0.0,
+        "y_max": 0.01,
+        "z_min": -0.02,
+        "z_max": 0,
+        "name": "Body 4 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -2.56,
+        "x_max": -0.88,
+        "y_min": 0.0,
+        "y_max": 0.01,
+        "z_min": -0.01,
+        "z_max": 0,
+        "name": "Body 5 (CutFeatureOperation)"
+      },
+      {
+        "x_min": 1.05,
+        "x_max": 8.07,
+        "y_min": 0,
+        "y_max": 0.01,
+        "z_min": -1.31,
+        "z_max": 0.0,
+        "name": "Body 6 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -3.08,
+        "x_max": -3.02,
+        "y_min": 0,
+        "y_max": 0.4,
+        "z_min": 1.14,
+        "z_max": 1.19,
+        "name": "Body 7 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -4.53,
+        "x_max": -4.47,
+        "y_min": 0,
+        "y_max": 0.02,
+        "z_min": 0.97,
+        "z_max": 1.01,
+        "name": "Body 8 (CutFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 563,
+      "timeline_count": 21,
+      "sketch_count": 13,
+      "extrude_count": 8,
+      "face_count": 270,
+      "body_count": 2,
+      "part_count": 8,
+      "operations": [
+        "CutFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 628.5
+    }
+  },
+  {
+    "keywords": [
+      "40693"
+    ],
+    "description": "40693 (7 parts, 6x1x15 cm)",
+    "source_file": "40693_d1d9ff4a_0000.json",
+    "parts": [
+      {
+        "x_min": -2.85,
+        "x_max": 2.84,
+        "y_min": 0,
+        "y_max": 0.6,
+        "z_min": -8.52,
+        "z_max": -0.86,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -0.43,
+        "x_max": 0.54,
+        "y_min": -0.5,
+        "y_max": 0,
+        "z_min": 0.86,
+        "z_max": 2.16,
+        "name": "Body 2 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -0.5,
+        "x_max": 0.6,
+        "y_min": 0,
+        "y_max": 0.05,
+        "z_min": 2.2,
+        "z_max": 2.8,
+        "name": "Body 3 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.5,
+        "x_max": 0.6,
+        "y_min": 0,
+        "y_max": 0.05,
+        "z_min": 5.4,
+        "z_max": 5.7,
+        "name": "Body 4 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.7,
+        "x_max": 0.8,
+        "y_min": 0,
+        "y_max": 0.03,
+        "z_min": 6.1,
+        "z_max": 6.4,
+        "name": "Body 5 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.45,
+        "x_max": 0.55,
+        "y_min": 0,
+        "y_max": 0.08,
+        "z_min": 6.1,
+        "z_max": 6.4,
+        "name": "Body 6 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -0.43,
+        "x_max": 0.54,
+        "y_min": 0,
+        "y_max": 0.58,
+        "z_min": 0.86,
+        "z_max": 2.16,
+        "name": "Body 7 (JoinFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 576,
+      "timeline_count": 18,
+      "sketch_count": 10,
+      "extrude_count": 8,
+      "face_count": 127,
+      "body_count": 1,
+      "part_count": 7,
+      "operations": [
+        "CutFeatureOperation",
+        "JoinFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 624.2
+    }
+  },
+  {
+    "keywords": [
+      "138539"
+    ],
+    "description": "138539 (29 parts, 352x164x79 cm)",
+    "source_file": "138539_b5a9ff56_0000.json",
+    "parts": [
+      {
+        "x_min": -176.25,
+        "x_max": 176.25,
+        "y_min": -12.85,
+        "y_max": 12.85,
+        "z_min": 0,
+        "z_max": 69.0,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 170.45,
+        "x_max": 176.25,
+        "y_min": 8.45,
+        "y_max": 12.85,
+        "z_min": 0,
+        "z_max": 12.5,
+        "name": "Body 2 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -176.25,
+        "x_max": -76.45,
+        "y_min": -12.85,
+        "y_max": -11.55,
+        "z_min": 0,
+        "z_max": 6.3,
+        "name": "Body 3 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -176.25,
+        "x_max": -76.45,
+        "y_min": 9.15,
+        "y_max": 12.85,
+        "z_min": 0,
+        "z_max": 6.3,
+        "name": "Body 4 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -176.25,
+        "x_max": -76.45,
+        "y_min": 9.15,
+        "y_max": 9.75,
+        "z_min": 0,
+        "z_max": 3.1,
+        "name": "Body 5 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 122.25,
+        "x_max": 176.25,
+        "y_min": 0,
+        "y_max": 64.0,
+        "z_min": 0.0,
+        "z_max": 62.0,
+        "name": "Body 6 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 122.25,
+        "x_max": 176.25,
+        "y_min": -76.85,
+        "y_max": -70.95,
+        "z_min": 0,
+        "z_max": 37.4,
+        "name": "Body 7 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -176.25,
+        "x_max": -170.45,
+        "y_min": -76.85,
+        "y_max": -72.45,
+        "z_min": 0,
+        "z_max": 12.5,
+        "name": "Body 8 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -76.45,
+        "x_max": 100.05,
+        "y_min": 9.15,
+        "y_max": 12.85,
+        "z_min": 0,
+        "z_max": 1.9,
+        "name": "Body 9 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -52.25,
+        "x_max": -41.95,
+        "y_min": 9.15,
+        "y_max": 12.85,
+        "z_min": -1.6,
+        "z_max": 0,
+        "name": "Body 10 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -76.45,
+        "x_max": 100.05,
+        "y_min": -12.85,
+        "y_max": -9.15,
+        "z_min": 0,
+        "z_max": 1.9,
+        "name": "Body 11 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -52.25,
+        "x_max": -41.95,
+        "y_min": -12.85,
+        "y_max": -9.15,
+        "z_min": -1.6,
+        "z_max": 0,
+        "name": "Body 12 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -174.25,
+        "x_max": 125.05,
+        "y_min": -11.55,
+        "y_max": 9.15,
+        "z_min": -10.3,
+        "z_max": 0,
+        "name": "Body 13 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -157.25,
+        "x_max": -78.25,
+        "y_min": -11.55,
+        "y_max": 9.15,
+        "z_min": -1.0,
+        "z_max": 0,
+        "name": "Body 14 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -61.25,
+        "x_max": 21.55,
+        "y_min": -9.15,
+        "y_max": 9.15,
+        "z_min": -1.0,
+        "z_max": 0,
+        "name": "Body 15 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 38.55,
+        "x_max": 102.55,
+        "y_min": -9.15,
+        "y_max": 9.15,
+        "z_min": -1.0,
+        "z_max": 0,
+        "name": "Body 16 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 125.05,
+        "x_max": 142.05,
+        "y_min": -9.15,
+        "y_max": 9.15,
+        "z_min": -10.3,
+        "z_max": 0,
+        "name": "Body 17 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -142.05,
+        "x_max": -119.55,
+        "y_min": 0,
+        "y_max": 18.3,
+        "z_min": 68.0,
+        "z_max": 69.0,
+        "name": "Body 18 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": 76.45,
+        "x_max": 170.45,
+        "y_min": -19.2,
+        "y_max": 0,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 19 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -23.35,
+        "x_max": 70.65,
+        "y_min": -19.2,
+        "y_max": 0,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 20 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -123.15,
+        "x_max": -29.15,
+        "y_min": -19.2,
+        "y_max": 0,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 21 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -170.45,
+        "x_max": -128.95,
+        "y_min": -100.0,
+        "y_max": 0,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 22 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -29.15,
+        "x_max": 170.45,
+        "y_min": -10.0,
+        "y_max": 0,
+        "z_min": 50.0,
+        "z_max": 53.0,
+        "name": "Body 23 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -167.5,
+        "x_max": 0,
+        "y_min": -8.45,
+        "y_max": 6.35,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 24 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -170.45,
+        "x_max": -76.45,
+        "y_min": -6.35,
+        "y_max": 8.45,
+        "z_min": -7.5,
+        "z_max": 0,
+        "name": "Body 25 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -70.65,
+        "x_max": 23.35,
+        "y_min": -6.35,
+        "y_max": 8.45,
+        "z_min": -7.5,
+        "z_max": 0,
+        "name": "Body 26 (CutFeatureOperation)"
+      },
+      {
+        "x_min": 29.15,
+        "x_max": 123.15,
+        "y_min": -6.35,
+        "y_max": 8.45,
+        "z_min": -10.0,
+        "z_max": 0,
+        "name": "Body 27 (CutFeatureOperation)"
+      },
+      {
+        "x_min": 70.65,
+        "x_max": 76.45,
+        "y_min": -12.85,
+        "y_max": -6.35,
+        "z_min": 0,
+        "z_max": 12.5,
+        "name": "Body 28 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -10.0,
+        "x_max": 0,
+        "y_min": -8.45,
+        "y_max": -6.45,
+        "z_min": 6.0,
+        "z_max": 53.0,
+        "name": "Body 29 (CutFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 492,
+      "timeline_count": 61,
+      "sketch_count": 32,
+      "extrude_count": 29,
+      "face_count": 110,
+      "body_count": 1,
+      "part_count": 29,
+      "operations": [
+        "CutFeatureOperation",
+        "JoinFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 613.0
+    }
+  },
+  {
+    "keywords": [
+      "126572"
+    ],
+    "description": "126572 (38 parts, 36x2x51 cm)",
+    "source_file": "126572_a2d6f794_0000.json",
+    "parts": [
+      {
+        "x_min": -16.52,
+        "x_max": -14.61,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 7.62,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -16.52,
+        "x_max": -14.61,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 7.62,
+        "z_max": 25.4,
+        "name": "Body 2 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -14.61,
+        "x_max": -12.71,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 2.54,
+        "name": "Body 3 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -14.61,
+        "x_max": -12.71,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 2.54,
+        "z_max": 25.4,
+        "name": "Body 4 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -12.71,
+        "x_max": -10.8,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -0.0,
+        "name": "Body 5 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -12.71,
+        "x_max": -10.8,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -0.0,
+        "z_max": 25.4,
+        "name": "Body 6 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -10.8,
+        "x_max": -8.9,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 5.08,
+        "name": "Body 7 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -10.8,
+        "x_max": -8.9,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 5.08,
+        "z_max": 25.4,
+        "name": "Body 8 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -8.9,
+        "x_max": -6.99,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 7.62,
+        "name": "Body 9 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -8.9,
+        "x_max": -6.99,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 7.62,
+        "z_max": 25.4,
+        "name": "Body 10 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -6.99,
+        "x_max": -5.09,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -12.7,
+        "name": "Body 11 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -6.99,
+        "x_max": -5.09,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -12.7,
+        "z_max": 25.4,
+        "name": "Body 12 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -5.09,
+        "x_max": -3.18,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -17.78,
+        "name": "Body 13 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -5.09,
+        "x_max": -3.18,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -17.78,
+        "z_max": 25.4,
+        "name": "Body 14 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -3.18,
+        "x_max": -3.18,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -17.78,
+        "name": "Body 15 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -3.18,
+        "x_max": -1.28,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 2.54,
+        "z_max": 25.4,
+        "name": "Body 16 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -1.28,
+        "x_max": 0.63,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 7.62,
+        "name": "Body 17 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -1.28,
+        "x_max": 0.63,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 7.62,
+        "z_max": 25.4,
+        "name": "Body 18 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 0.63,
+        "x_max": 2.53,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 2.54,
+        "z_max": 25.4,
+        "name": "Body 19 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 2.53,
+        "x_max": 4.44,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -0.0,
+        "name": "Body 20 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 0.63,
+        "x_max": 2.53,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 2.54,
+        "name": "Body 21 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 2.53,
+        "x_max": 4.44,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -0.0,
+        "z_max": 25.4,
+        "name": "Body 22 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 4.44,
+        "x_max": 6.34,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 5.08,
+        "name": "Body 23 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 4.44,
+        "x_max": 6.34,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 5.08,
+        "z_max": 25.4,
+        "name": "Body 24 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 6.34,
+        "x_max": 8.25,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 7.62,
+        "name": "Body 25 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 6.34,
+        "x_max": 8.25,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 7.62,
+        "z_max": 25.4,
+        "name": "Body 26 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 8.25,
+        "x_max": 10.15,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -12.7,
+        "name": "Body 27 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 8.25,
+        "x_max": 10.15,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -12.7,
+        "z_max": 25.4,
+        "name": "Body 28 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 10.15,
+        "x_max": 12.06,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -17.78,
+        "name": "Body 29 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 10.15,
+        "x_max": 12.06,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -17.78,
+        "z_max": 25.4,
+        "name": "Body 30 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 12.06,
+        "x_max": 13.96,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -0.0,
+        "name": "Body 31 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 12.06,
+        "x_max": 13.96,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -0.0,
+        "z_max": 25.4,
+        "name": "Body 32 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 13.96,
+        "x_max": 15.87,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 2.54,
+        "name": "Body 33 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 13.96,
+        "x_max": 15.87,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 2.54,
+        "z_max": 25.4,
+        "name": "Body 34 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 15.87,
+        "x_max": 17.77,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": 7.62,
+        "name": "Body 35 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 15.87,
+        "x_max": 17.77,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": 7.62,
+        "z_max": 25.4,
+        "name": "Body 36 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 17.77,
+        "x_max": 19.68,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -25.4,
+        "z_max": -0.0,
+        "name": "Body 37 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 17.77,
+        "x_max": 19.68,
+        "y_min": 0,
+        "y_max": 1.91,
+        "z_min": -0.0,
+        "z_max": 25.4,
+        "name": "Body 38 (NewBodyFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 198,
+      "timeline_count": 39,
+      "sketch_count": 1,
+      "extrude_count": 38,
+      "face_count": 268,
+      "body_count": 38,
+      "part_count": 38,
+      "operations": [
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 453.3
+    }
+  },
+  {
+    "keywords": [
+      "41117"
+    ],
+    "description": "41117 (2 parts, 3x0x1 cm)",
+    "source_file": "41117_1b3271f2_0000.json",
+    "parts": [
+      {
+        "x_min": 2.92,
+        "x_max": 6.4,
+        "y_min": 0,
+        "y_max": 0.4,
+        "z_min": -4.21,
+        "z_max": -4.06,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 2.92,
+        "x_max": 6.4,
+        "y_min": 0,
+        "y_max": 0.3,
+        "z_min": -4.06,
+        "z_max": -3.39,
+        "name": "Body 2 (JoinFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 293,
+      "timeline_count": 8,
+      "sketch_count": 1,
+      "extrude_count": 7,
+      "face_count": 122,
+      "body_count": 29,
+      "part_count": 2,
+      "operations": [
+        "JoinFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 413.2
+    }
+  },
+  {
+    "keywords": [
+      "23743"
+    ],
+    "description": "23743 (2 parts, 4x6x3 cm)",
+    "source_file": "23743_a0373929_0000.json",
+    "parts": [
+      {
+        "x_min": 0,
+        "x_max": 2.29,
+        "y_min": -2.92,
+        "y_max": 2.92,
+        "z_min": 2.69,
+        "z_max": 2.92,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -1.88,
+        "x_max": -1.68,
+        "y_min": -3.56,
+        "y_max": 0,
+        "z_min": -0.13,
+        "z_max": 0.13,
+        "name": "Body 2 (CutFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 352,
+      "timeline_count": 8,
+      "sketch_count": 4,
+      "extrude_count": 4,
+      "face_count": 368,
+      "body_count": 2,
+      "part_count": 2,
+      "operations": [
+        "CutFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 409.8
+    }
+  },
+  {
+    "keywords": [
+      "30980"
+    ],
+    "description": "30980 (18 parts, 886x255x397 cm)",
+    "source_file": "30980_d0535092_0000.json",
+    "parts": [
+      {
+        "x_min": 0.0,
+        "x_max": 400.53,
+        "y_min": -2.5,
+        "y_max": 0,
+        "z_min": -200.09,
+        "z_max": 0.0,
+        "name": "Body 1 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -396.66,
+        "x_max": -2.32,
+        "y_min": 0,
+        "y_max": 100.0,
+        "z_min": 2.08,
+        "z_max": 196.72,
+        "name": "Body 2 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -389.16,
+        "x_max": -9.91,
+        "y_min": -70.0,
+        "y_max": 0,
+        "z_min": 10.12,
+        "z_max": 189.26,
+        "name": "Body 3 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -384.84,
+        "x_max": -14.9,
+        "y_min": 0,
+        "y_max": 95.0,
+        "z_min": 10.12,
+        "z_max": 179.72,
+        "name": "Body 4 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 60.0,
+        "z_min": 10.12,
+        "z_max": 15.7,
+        "name": "Body 5 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 20.0,
+        "z_min": 172.98,
+        "z_max": 179.72,
+        "name": "Body 6 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 30.0,
+        "z_min": 15.7,
+        "z_max": 100.36,
+        "name": "Body 7 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 5.0,
+        "z_min": 15.7,
+        "z_max": 94.97,
+        "name": "Body 8 (JoinFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 10.0,
+        "z_min": 73.11,
+        "z_max": 79.9,
+        "name": "Body 9 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -19.49,
+        "y_min": 0,
+        "y_max": 10.0,
+        "z_min": 15.7,
+        "z_max": 73.11,
+        "name": "Body 10 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -370.79,
+        "x_max": -28.34,
+        "y_min": -10.0,
+        "y_max": 0,
+        "z_min": 24.57,
+        "z_max": 65.43,
+        "name": "Body 11 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -370.79,
+        "x_max": -28.34,
+        "y_min": 0,
+        "y_max": 10.0,
+        "z_min": 24.57,
+        "z_max": 65.43,
+        "name": "Body 12 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": -485.0,
+        "x_max": 0,
+        "y_min": 133.97,
+        "y_max": 185.01,
+        "z_min": 178.37,
+        "z_max": 185.0,
+        "name": "Body 13 (CutFeatureOperation)"
+      },
+      {
+        "x_min": -380.93,
+        "x_max": -365.03,
+        "y_min": 0,
+        "y_max": 30.0,
+        "z_min": 100.36,
+        "z_max": 172.98,
+        "name": "Body 14 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 171.02,
+        "x_max": 228.94,
+        "y_min": 69.35,
+        "y_max": 90.13,
+        "z_min": 0,
+        "z_max": 1.0,
+        "name": "Body 15 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 197.79,
+        "x_max": 200.47,
+        "y_min": 75.35,
+        "y_max": 82.53,
+        "z_min": -2.5,
+        "z_max": 0,
+        "name": "Body 16 (CutFeatureOperation)"
+      },
+      {
+        "x_min": 99.5,
+        "x_max": 301.39,
+        "y_min": 45.52,
+        "y_max": 55.7,
+        "z_min": 0,
+        "z_max": 2.5,
+        "name": "Body 17 (NewBodyFeatureOperation)"
+      },
+      {
+        "x_min": 107.56,
+        "x_max": 116.41,
+        "y_min": 45.52,
+        "y_max": 55.7,
+        "z_min": 0,
+        "z_max": 10.0,
+        "name": "Body 18 (JoinFeatureOperation)"
+      }
+    ],
+    "complexity": {
+      "sequence_count": 258,
+      "timeline_count": 51,
+      "sketch_count": 26,
+      "extrude_count": 25,
+      "face_count": 188,
+      "body_count": 12,
+      "part_count": 18,
+      "operations": [
+        "CutFeatureOperation",
+        "JoinFeatureOperation",
+        "NewBodyFeatureOperation"
+      ],
+      "complexity_score": 401.3
+    }
+  }
+]

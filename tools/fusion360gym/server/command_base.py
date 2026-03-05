@@ -87,7 +87,7 @@ class CommandBase():
             )
             if return_data["iou"] is None:
                 self.logger.log("Warning! IoU calculation returned None")
-        # Bounding box of the reconstruction component
-        bbox = geometry.get_bounding_box(self.design_state.reconstruction)
+        # Bounding box of the reconstruction component (use .component so both Occurrence and Part Design root wrapper work)
+        bbox = geometry.get_bounding_box(self.design_state.reconstruction.component)
         return_data["bounding_box"] = serialize.bounding_box3d(bbox)
         return self.runner.return_success(return_data)

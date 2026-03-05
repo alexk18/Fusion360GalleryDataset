@@ -67,6 +67,7 @@ class Fusion360GymServerRequestHandler(BaseHTTPRequestHandler):
             if command == "detach":
                 self.logger.log("Shutting down...")
                 self.detach()
+                return
 
             data = None
             if "data" in post_data:
@@ -86,7 +87,7 @@ class Fusion360GymServerRequestHandler(BaseHTTPRequestHandler):
             message = f"""Error processing {command} command\n
                 Exception of type {type(ex)} with args: {ex.args}\n
                 {traceback.format_exc()}"""
-            self.respond(500, ex)
+            self.respond(500, message)
 
     def do_GET(self):
         self.respond(400, "GET not supported, use POST")
@@ -156,31 +157,40 @@ def get_launch_endpoint():
 def start_server():
     """Start the server"""
 
-    # # Setup the logger globally after Fusion has started
     logger = Logger()
     logger.log("Started server...")
-    # # Set up the command runner we use to execute commands
-    runner = CommandRunner()
-    runner.set_logger(logger)
 
-    # Workaround to pass the logger and runner
-    def handler(*args):
-        Fusion360GymServerRequestHandler(logger, runner, *args)
-
-    # Check if we need to use a different host name and port
-    host_name, port_number = get_launch_endpoint()
-
-    # Launch the server which will block the UI thread
-    logger.log(f"Connecting on: {host_name}:{port_number}")
-    server = HTTPServer((host_name, port_number), handler)
     try:
-        server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt:
-        pass
+        app = adsk.core.Application.get()
+        if app.activeProduct is None:
+            logger.log("No active document. Open or create a design first, then run the add-in again.")
+            return
+
+        # Set up the command runner we use to execute commands
+        runner = CommandRunner()
+        runner.set_logger(logger)
+
+        # Workaround to pass the logger and runner
+        def handler(*args):
+            Fusion360GymServerRequestHandler(logger, runner, *args)
+
+        # Check if we need to use a different host name and port
+        host_name, port_number = get_launch_endpoint()
+
+        # Launch the server which will block the UI thread
+        logger.log(f"Connecting on: {host_name}:{port_number}")
+        server = HTTPServer((host_name, port_number), handler)
+        try:
+            server.serve_forever(poll_interval=0.5)
+        except KeyboardInterrupt:
+            pass
+        except Exception as ex:
+            logger.log(str(ex))
+        finally:
+            server.server_close()
+
     except Exception as ex:
-        logger.log(str(ex))
-    finally:
-        server.server_close()
+        logger.log(f"Server failed to start: {ex}\n{traceback.format_exc()}")
 
 
 def run(context):
@@ -198,5 +208,5 @@ def run(context):
             on_online_status_changed = OnlineStatusChangedHandler()
             app.onlineStatusChanged.add(on_online_status_changed)
             handlers.append(on_online_status_changed)
-    except:
+    except Exception:
         print(traceback.format_exc())
