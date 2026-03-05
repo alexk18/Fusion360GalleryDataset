@@ -46,6 +46,16 @@ MAX_FEEDBACK_ITERATIONS = int(os.environ.get("MAX_FEEDBACK_ITERATIONS", "1"))
 ENABLE_VISUAL_REVIEW = os.environ.get("ENABLE_VISUAL_REVIEW", "0").strip().lower() in (
     "1", "true", "yes", "on"
 )
+ENABLE_DETAILING_PASS = os.environ.get("ENABLE_DETAILING_PASS", "1").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+DETAILING_MAX_PARTS = int(os.environ.get("DETAILING_MAX_PARTS", "22"))
+PROGRAM_DETAIL_MAX_STEPS = int(os.environ.get("PROGRAM_DETAIL_MAX_STEPS", "12"))
+ENABLE_AUTO_DETAIL_PROGRAM = os.environ.get("ENABLE_AUTO_DETAIL_PROGRAM", "1").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+AUTO_DETAIL_PROGRAM_ROUNDS = int(os.environ.get("AUTO_DETAIL_PROGRAM_ROUNDS", "2"))
+AUTO_DETAIL_MIN_CONFIDENCE = float(os.environ.get("AUTO_DETAIL_MIN_CONFIDENCE", "0.55"))
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").lower()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
@@ -128,6 +138,97 @@ Rules:
 
 Return ONLY JSON:
 {format_hint}
+"""
+
+DETAILING_PROMPT = r"""You refine an EXISTING CAD part list by adding functional detail.
+
+Input:
+1) Current model as axis-aligned bboxes.
+2) User/object context.
+3) Optional photos of the same object.
+
+Goal:
+- Keep the existing global silhouette and proportions.
+- Add missing functional details that are clearly supported by context/photos.
+- Do not replace the whole model with unrelated geometry.
+
+Rules:
+- Preserve structural core parts; add details conservatively.
+- Prefer grouped detail volumes (e.g., track_segment_group, vent_group, wheel_group) over dozens of tiny parts.
+- Keep physical connectivity and floor consistency (Z >= 0).
+- Do not invent decorative parts without evidence.
+- Return the COMPLETE updated parts list as JSON.
+
+Return ONLY JSON:
+{format_hint}
+"""
+
+PROGRAM_DETAIL_PLANNER_PROMPT = r"""You are a Fusion CAD action planner for detail refinement.
+
+Task:
+- You receive current model parts, a detail request, and optional image evidence.
+- Generate a short sequence of additional build actions that add functional details.
+- Steps must be conservative and physically plausible.
+
+Allowed actions:
+- refresh
+- build (rect or circle extrude only)
+
+Build step schema:
+{
+  "action": "build",
+  "description": "name",
+  "plane": "XY" or "XY@<z_offset_cm>",
+  "shape": "rect" or "circle",
+  "cx": number,
+  "cy": number,
+  "w": number,      // required for rect
+  "h": number,      // required for rect
+  "radius": number, // required for circle
+  "distance": number,
+  "operation": "NewBodyFeatureOperation" or "JoinFeatureOperation" or "CutFeatureOperation",
+  "repeat": number,  // optional >=1
+  "dx": number,      // optional per-copy shift in X (cm)
+  "dy": number,      // optional per-copy shift in Y (cm)
+  "dz": number       // optional per-copy shift in Z/plane offset (cm)
+}
+
+Rules:
+- Do NOT clear or rebuild the full model.
+- Keep steps count small and impactful.
+- Prefer grouped functional details (e.g. track block groups, wheel groups, vents).
+- Keep dimensions realistic relative to existing model bounds.
+- If uncertain, output fewer safer steps.
+
+Return ONLY JSON:
+{"steps":[...]}
+"""
+
+DETAIL_EVALUATOR_PROMPT = r"""You are a CAD detail evaluator.
+
+Input:
+- current model parts (coarse + existing details)
+- original user request/context
+- optional photos
+
+Task:
+- Decide if more functional/mechanical details are needed.
+- Propose a concise detail request for a downstream action planner.
+- Stay object-agnostic: tank, aircraft, furniture, tools, gadgets, etc.
+
+Rules:
+- Do not request details that are not supported by context/photos.
+- Prioritize functional details over decorative noise.
+- If current detail level is already sufficient, say no.
+
+Return ONLY JSON:
+{
+  "should_add_details": true,
+  "confidence": 0.0,
+  "detail_request": "short actionable detail brief",
+  "missing_detail_groups": ["group_a", "group_b"],
+  "notes": ["short reason"]
+}
 """
 
 EXTEND_REVISION_PROMPT = r"""The user has an EXISTING 3D model in the CAD program and wants to EXTEND or MODIFY it (add parts, change dimensions, add armrests, make back higher, etc.).
@@ -480,6 +581,7 @@ class FusionAIAssistant:
         self.review_enabled = ENABLE_VISUAL_REVIEW
         self.last_parts = []
         self.last_request = ""
+        self.last_images = []
         self.recon_root = Path(RECON_DATASET_ROOT)
         self._recon_file_cache = {}
 
@@ -1111,6 +1213,298 @@ class FusionAIAssistant:
         parts = self._sanitize_parts(parts)
         return self._limit_parts_for_stability(parts, max_parts=max(12, len(current_parts) + 4))
 
+    def _detail_model_parts(self, current_parts, user_request, images=None, max_parts=None):
+        """Add functional details on top of current model while preserving global shape."""
+        if not current_parts:
+            return []
+        parts_summary = "\n".join(
+            f"  {p['name']}: x_min={p['x_min']}, x_max={p['x_max']}, "
+            f"y_min={p['y_min']}, y_max={p['y_max']}, z_min={p['z_min']}, z_max={p['z_max']}"
+            for p in current_parts
+        )
+        format_hint = (
+            '{"parts": [\n'
+            '  {"name": "Part A", "x_min": -20, "x_max": 20, '
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+            '  ...\n'
+            ']}'
+        )
+        prompt = DETAILING_PROMPT.replace("{format_hint}", format_hint)
+        request_text = (
+            f"Current model parts (cm):\n{parts_summary}\n\n"
+            f"Context/request: {user_request}\n\n"
+            "Add missing functional details while preserving silhouette and connectivity. "
+            "Return the COMPLETE updated parts list."
+        )
+        if images:
+            raw = self._call_llm_with_images(prompt, request_text, images)
+        else:
+            raw = self._call_llm(prompt, request_text)
+        out = self._parse_json(raw)
+        parts = out.get("parts", [])
+        if not parts:
+            return []
+        parts = self._sanitize_parts(parts)
+        cap = max_parts if isinstance(max_parts, int) and max_parts > 0 else max(16, len(current_parts) + 8)
+        return self._limit_parts_for_stability(parts, max_parts=cap)
+
+    @staticmethod
+    def _parse_xy_plane_offset(plane):
+        s = str(plane or "XY").strip().upper()
+        if s == "XY":
+            return 0.0
+        if s.startswith("XY@"):
+            try:
+                return float(s.split("@", 1)[1])
+            except Exception:
+                return 0.0
+        return 0.0
+
+    def _steps_to_bboxes(self, steps):
+        out = []
+        for i, st in enumerate(steps):
+            if str(st.get("action", "")).lower() != "build":
+                continue
+            shape = str(st.get("shape", "rect")).lower()
+            base_z0 = self._parse_xy_plane_offset(st.get("plane", "XY"))
+            repeat = int(max(1, min(32, self._to_float(st.get("repeat"), 1))))
+            dx_rep = self._to_float(st.get("dx"), 0.0)
+            dy_rep = self._to_float(st.get("dy"), 0.0)
+            dz_rep = self._to_float(st.get("dz"), 0.0)
+            dist = abs(self._to_float(st.get("distance"), 0.0))
+            if dist <= 0.1:
+                continue
+            name = str(st.get("description", f"detail_{i+1}")).strip() or f"detail_{i+1}"
+            base_cx = self._to_float(st.get("cx"), 0.0)
+            base_cy = self._to_float(st.get("cy"), 0.0)
+            for r_idx in range(repeat):
+                z0 = base_z0 + dz_rep * r_idx
+                z1 = z0 + dist
+                cx = base_cx + dx_rep * r_idx
+                cy = base_cy + dy_rep * r_idx
+                item_name = f"{name}_{r_idx+1}" if repeat > 1 else name
+                if shape == "circle":
+                    rad = abs(self._to_float(st.get("radius"), 0.0))
+                    if rad <= 0.1:
+                        continue
+                    out.append({
+                        "name": item_name,
+                        "x_min": cx - rad, "x_max": cx + rad,
+                        "y_min": cy - rad, "y_max": cy + rad,
+                        "z_min": min(z0, z1), "z_max": max(z0, z1),
+                    })
+                else:
+                    w = abs(self._to_float(st.get("w"), 0.0))
+                    h = abs(self._to_float(st.get("h"), 0.0))
+                    if w <= 0.1 or h <= 0.1:
+                        continue
+                    out.append({
+                        "name": item_name,
+                        "x_min": cx - w / 2.0, "x_max": cx + w / 2.0,
+                        "y_min": cy - h / 2.0, "y_max": cy + h / 2.0,
+                        "z_min": min(z0, z1), "z_max": max(z0, z1),
+                    })
+        return out
+
+    def _summarize_reconstruction_json(self, json_path):
+        summary = {
+            "extrude_total": 0,
+            "new_body": 0,
+            "join": 0,
+            "cut": 0,
+            "sketch_circle_count": 0,
+            "sketch_line_count": 0,
+        }
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return summary
+        entities = data.get("entities", {}) or {}
+        for ent in entities.values():
+            if not isinstance(ent, dict):
+                continue
+            t = str(ent.get("type", ""))
+            if t == "ExtrudeFeature":
+                summary["extrude_total"] += 1
+                op = str(ent.get("operation", ""))
+                if op == "NewBodyFeatureOperation":
+                    summary["new_body"] += 1
+                elif op == "JoinFeatureOperation":
+                    summary["join"] += 1
+                elif op == "CutFeatureOperation":
+                    summary["cut"] += 1
+            if t == "Sketch":
+                curves = ent.get("curves", {}) or {}
+                for c in curves.values():
+                    ct = str((c or {}).get("type", ""))
+                    if "Circle" in ct:
+                        summary["sketch_circle_count"] += 1
+                    elif "Line" in ct:
+                        summary["sketch_line_count"] += 1
+        return summary
+
+    def _dataset_action_hints(self, query, top_k=2):
+        hints = []
+        for d in self.index.find_similar(query, top_k=top_k):
+            src = str(d.get("source_file", "")).strip()
+            rec_summary = {}
+            p = self.find_reconstruction_json(src) if src else None
+            if p is not None:
+                rec_summary = self._summarize_reconstruction_json(p)
+            hints.append({
+                "description": d.get("description", ""),
+                "keywords": d.get("keywords", [])[:8],
+                "source_file": src,
+                "reconstruction_summary": rec_summary,
+            })
+        return hints
+
+    def _sanitize_program_steps(self, steps, max_steps=None):
+        if not isinstance(steps, list):
+            return []
+        cap = max_steps if isinstance(max_steps, int) and max_steps > 0 else PROGRAM_DETAIL_MAX_STEPS
+        out = []
+        for st in steps:
+            if not isinstance(st, dict):
+                continue
+            action = str(st.get("action", "")).strip().lower()
+            if action not in ("build", "refresh"):
+                continue
+            if action == "refresh":
+                out.append({"action": "refresh"})
+            else:
+                shape = str(st.get("shape", "rect")).strip().lower()
+                if shape not in ("rect", "circle"):
+                    continue
+                step = {
+                    "action": "build",
+                    "description": str(st.get("description", "detail")).strip() or "detail",
+                    "plane": str(st.get("plane", "XY")).strip() or "XY",
+                    "shape": shape,
+                    "cx": round(self._to_float(st.get("cx"), 0.0), 1),
+                    "cy": round(self._to_float(st.get("cy"), 0.0), 1),
+                    "distance": round(self._to_float(st.get("distance"), 0.0), 1),
+                    "operation": str(st.get("operation", "NewBodyFeatureOperation")).strip() or "NewBodyFeatureOperation",
+                }
+                if step["distance"] <= 0.1:
+                    continue
+                repeat = int(max(1, min(32, self._to_float(st.get("repeat"), 1))))
+                step["repeat"] = repeat
+                step["dx"] = round(self._to_float(st.get("dx"), 0.0), 1)
+                step["dy"] = round(self._to_float(st.get("dy"), 0.0), 1)
+                step["dz"] = round(self._to_float(st.get("dz"), 0.0), 1)
+                if shape == "rect":
+                    step["w"] = round(abs(self._to_float(st.get("w"), 0.0)), 1)
+                    step["h"] = round(abs(self._to_float(st.get("h"), 0.0)), 1)
+                    if step["w"] <= 0.1 or step["h"] <= 0.1:
+                        continue
+                else:
+                    step["radius"] = round(abs(self._to_float(st.get("radius"), 0.0)), 1)
+                    if step["radius"] <= 0.1:
+                        continue
+                if step["operation"] not in ("NewBodyFeatureOperation", "JoinFeatureOperation", "CutFeatureOperation"):
+                    step["operation"] = "NewBodyFeatureOperation"
+                out.append(step)
+            if len(out) >= cap:
+                break
+        return out
+
+    def _plan_detail_program_steps(self, current_parts, user_request, images=None):
+        if not current_parts:
+            return []
+        parts_summary = "\n".join(
+            f"  {p['name']}: x_min={p['x_min']}, x_max={p['x_max']}, "
+            f"y_min={p['y_min']}, y_max={p['y_max']}, z_min={p['z_min']}, z_max={p['z_max']}"
+            for p in current_parts
+        )
+        hints = self._dataset_action_hints(user_request, top_k=2)
+        request_text = (
+            f"Current model parts (cm):\n{parts_summary}\n\n"
+            f"Detail request: {user_request}\n\n"
+            f"Dataset action hints:\n{json.dumps(hints, ensure_ascii=True)}\n\n"
+            "Plan only additional steps to add functional details on top of current model."
+        )
+        raw = (
+            self._call_llm_with_images(PROGRAM_DETAIL_PLANNER_PROMPT, request_text, images)
+            if images else
+            self._call_llm(PROGRAM_DETAIL_PLANNER_PROMPT, request_text)
+        )
+        payload = self._parse_json(raw)
+        return self._sanitize_program_steps(payload.get("steps", []), max_steps=PROGRAM_DETAIL_MAX_STEPS)
+
+    def _evaluate_detail_needs(self, current_parts, user_request, images=None):
+        if not current_parts:
+            return {
+                "should_add_details": False,
+                "confidence": 0.0,
+                "detail_request": "",
+                "missing_detail_groups": [],
+            }
+        parts_summary = "\n".join(
+            f"  {p['name']}: x_min={p['x_min']}, x_max={p['x_max']}, "
+            f"y_min={p['y_min']}, y_max={p['y_max']}, z_min={p['z_min']}, z_max={p['z_max']}"
+            for p in current_parts
+        )
+        text = (
+            f"User context: {user_request}\n\n"
+            f"Current parts:\n{parts_summary}\n\n"
+            "Evaluate whether additional functional/mechanical details should be added."
+        )
+        try:
+            raw = (
+                self._call_llm_with_images(DETAIL_EVALUATOR_PROMPT, text, images)
+                if images else
+                self._call_llm(DETAIL_EVALUATOR_PROMPT, text)
+            )
+            out = self._parse_json(raw)
+        except Exception:
+            return {
+                "should_add_details": False,
+                "confidence": 0.0,
+                "detail_request": "",
+                "missing_detail_groups": [],
+            }
+        conf = max(0.0, min(1.0, self._to_float(out.get("confidence"), 0.0)))
+        should = bool(out.get("should_add_details")) and conf >= AUTO_DETAIL_MIN_CONFIDENCE
+        return {
+            "should_add_details": should,
+            "confidence": conf,
+            "detail_request": str(out.get("detail_request", "")).strip(),
+            "missing_detail_groups": out.get("missing_detail_groups", []) or [],
+            "notes": out.get("notes", []) or [],
+        }
+
+    def _auto_detail_program(self, current_parts, user_request, images=None, rounds=None):
+        if not current_parts:
+            return list(current_parts)
+        max_rounds = rounds if isinstance(rounds, int) and rounds > 0 else max(1, AUTO_DETAIL_PROGRAM_ROUNDS)
+        parts = list(current_parts)
+        for r in range(max_rounds):
+            assessment = self._evaluate_detail_needs(parts, user_request, images=images)
+            if not assessment.get("should_add_details", False):
+                if r == 0:
+                    print("  [AutoDetail] Evaluator: current detail level is sufficient.")
+                break
+            req = assessment.get("detail_request", "").strip() or user_request
+            print(f"  [AutoDetail] Round {r+1}: planning details (confidence={assessment.get('confidence', 0.0):.2f})...")
+            try:
+                steps = self._plan_detail_program_steps(parts, req, images=images)
+            except Exception:
+                steps = []
+            if not steps:
+                print("  [AutoDetail] Planner returned no detail steps.")
+                break
+            print(f"  [AutoDetail] Executing {len(steps)} detail steps...")
+            self.execute_plan(steps)
+            added = self._steps_to_bboxes(steps)
+            if not added:
+                break
+            merged = parts + added
+            merged = self._sanitize_parts(merged)
+            parts = self._limit_parts_for_stability(merged, max_parts=DETAILING_MAX_PARTS)
+        return parts
+
     # -- screenshot -----------------------------------------------------------
 
     def take_screenshot(self):
@@ -1615,41 +2009,59 @@ class FusionAIAssistant:
             shape = step.get("shape", "rect")
             distance = step.get("distance", 5)
             operation = step.get("operation", "NewBodyFeatureOperation")
+            repeat = int(max(1, min(32, self._to_float(step.get("repeat"), 1))))
+            dx_rep = self._to_float(step.get("dx"), 0.0)
+            dy_rep = self._to_float(step.get("dy"), 0.0)
+            dz_rep = self._to_float(step.get("dz"), 0.0)
 
             print(f"    [build] {desc}  |  {plane}  cx={step.get('cx')}"
                   f"  cy={step.get('cy')}  w={step.get('w')}"
-                  f"  h={step.get('h')}  d={distance}")
+                  f"  h={step.get('h')}  d={distance}"
+                  f"  repeat={repeat}")
 
-            r = self.fusion.add_sketch(plane)
-            if r.status_code != 200:
-                print(f"            Error: add_sketch -> {r.json().get('message', '')}")
-                return False
-            sketch_name = r.json()["data"]["sketch_name"]
+            base_cx = self._to_float(step.get("cx"), 0.0)
+            base_cy = self._to_float(step.get("cy"), 0.0)
+            base_plane = str(plane)
 
-            if shape == "rect":
-                profile_id = self._draw_rect(
-                    sketch_name,
-                    step.get("cx", 0), step.get("cy", 0),
-                    step.get("w", 10), step.get("h", 10),
-                )
-            elif shape == "circle":
-                profile_id = self._draw_circle(
-                    sketch_name,
-                    step.get("cx", 0), step.get("cy", 0),
-                    step.get("radius", 5),
-                )
-            else:
-                print(f"            Unknown shape: {shape}")
-                return False
+            for idx in range(repeat):
+                cur_plane = base_plane
+                if abs(dz_rep) > 1e-6:
+                    z0 = self._parse_xy_plane_offset(base_plane) + dz_rep * idx
+                    cur_plane = f"XY@{round(z0, 3)}"
 
-            if profile_id is None:
-                print("            Error: profile not created")
-                return False
+                r = self.fusion.add_sketch(cur_plane)
+                if r.status_code != 200:
+                    print(f"            Error: add_sketch -> {r.json().get('message', '')}")
+                    return False
+                sketch_name = r.json()["data"]["sketch_name"]
 
-            r = self.fusion.add_extrude(sketch_name, profile_id, distance, operation)
-            if r.status_code != 200:
-                print(f"            Error: extrude -> {r.json().get('message', '')}")
-                return False
+                cx = base_cx + dx_rep * idx
+                cy = base_cy + dy_rep * idx
+
+                if shape == "rect":
+                    profile_id = self._draw_rect(
+                        sketch_name,
+                        cx, cy,
+                        step.get("w", 10), step.get("h", 10),
+                    )
+                elif shape == "circle":
+                    profile_id = self._draw_circle(
+                        sketch_name,
+                        cx, cy,
+                        step.get("radius", 5),
+                    )
+                else:
+                    print(f"            Unknown shape: {shape}")
+                    return False
+
+                if profile_id is None:
+                    print("            Error: profile not created")
+                    return False
+
+                r = self.fusion.add_extrude(sketch_name, profile_id, distance, operation)
+                if r.status_code != 200:
+                    print(f"            Error: extrude -> {r.json().get('message', '')}")
+                    return False
 
             time.sleep(STEP_DELAY)
             return True
@@ -1877,6 +2289,8 @@ class FusionAIAssistant:
                 print("    - build from image <path>  (vision: build from photo; needs vision-capable model)")
                 print("    - build from photo <path>")
                 print("    - build from folder <path> (multi-view: all photos are one object)")
+                print("    - detail <what to add/refine> (refine current model with functional details)")
+                print("    - detail program <what to add/refine> (plan and execute detail actions)")
                 print("  To extend current model: e.g. 'add armrests', 'make the back higher' (no command).")
                 print()
                 continue
@@ -1953,6 +2367,79 @@ class FusionAIAssistant:
                 print("  Model cleared.\n")
                 continue
 
+            if (user_lower == "detail" or user_lower.startswith("detail ")) and not user_lower.startswith("detail program"):
+                if not self.ensure_connection():
+                    continue
+                if not self.last_parts:
+                    print("  No current model parts. Build something first.\n")
+                    continue
+                detail_req = command_input[len("detail "):].strip() if user_lower.startswith("detail ") else ""
+                if not detail_req:
+                    detail_req = f"Refine details for: {self.last_request or 'current object'}"
+                print("\n  [Detail] Refining current model with functional details...\n")
+                try:
+                    detailed = self._detail_model_parts(
+                        self.last_parts,
+                        detail_req,
+                        images=self.last_images if self.last_images else None,
+                        max_parts=DETAILING_MAX_PARTS,
+                    )
+                except json.JSONDecodeError:
+                    print("  Error: model returned invalid JSON for detail pass.\n")
+                    continue
+                except Exception as e:
+                    print(f"  Detailing failed: {e}\n")
+                    continue
+                if not detailed:
+                    print("  Detail pass returned no parts.\n")
+                    continue
+                print(f"  Detail pass produced {len(detailed)} parts.\n")
+                self.execute_plan(self.encode(detailed))
+                self.last_parts = self._interactive_user_refine(
+                    f"detail {detail_req}",
+                    detailed,
+                    images=self.last_images if self.last_images else None,
+                )
+                self.last_request = f"detail {detail_req}"
+                print("  Done.\n")
+                continue
+
+            if user_lower == "detail program" or user_lower.startswith("detail program "):
+                if not self.ensure_connection():
+                    continue
+                if not self.last_parts:
+                    print("  No current model parts. Build something first.\n")
+                    continue
+                req = command_input[len("detail program "):].strip() if user_lower.startswith("detail program ") else ""
+                if not req:
+                    req = f"Add functional details for: {self.last_request or 'current object'}"
+                print("\n  [Detail Program] Planning detail actions...\n")
+                try:
+                    steps = self._plan_detail_program_steps(
+                        self.last_parts,
+                        req,
+                        images=self.last_images if self.last_images else None,
+                    )
+                except json.JSONDecodeError:
+                    print("  Error: model returned invalid JSON for detail program.\n")
+                    continue
+                except Exception as e:
+                    print(f"  Detail program planning failed: {e}\n")
+                    continue
+                if not steps:
+                    print("  Planner returned no executable detail steps.\n")
+                    continue
+                print(f"  Planned {len(steps)} detail steps.\n")
+                self.execute_plan(steps)
+                added_parts = self._steps_to_bboxes(steps)
+                if added_parts:
+                    merged = list(self.last_parts) + added_parts
+                    merged = self._sanitize_parts(merged)
+                    self.last_parts = self._limit_parts_for_stability(merged, max_parts=DETAILING_MAX_PARTS)
+                self.last_request = f"detail program {req}"
+                print("  Done.\n")
+                continue
+
             # Build from folder (multi-view vision model)
             if user_lower.startswith("build from folder "):
                 if not self.ensure_connection():
@@ -1992,6 +2479,19 @@ class FusionAIAssistant:
                 if not parts:
                     print("  Error: no parts from multi-view photos.\n")
                     continue
+                if ENABLE_DETAILING_PASS:
+                    print("  [Step A2] Detail pass: enriching functional geometry...\n")
+                    try:
+                        detailed = self._detail_model_parts(
+                            parts,
+                            f"Object context: multi-view build from folder {folder}",
+                            images=images,
+                            max_parts=DETAILING_MAX_PARTS,
+                        )
+                        if detailed:
+                            parts = detailed
+                    except Exception:
+                        pass
                 print(f"  Architect produced {len(parts)} parts from folder:")
                 for p in parts:
                     print(f"    - {p['name']:30s}  X[{p['x_min']:7.1f},{p['x_max']:7.1f}]"
@@ -2008,12 +2508,21 @@ class FusionAIAssistant:
                     print()
                 print("  [Execute] Building in Fusion 360...\n")
                 self.execute_plan(steps)
+                if ENABLE_AUTO_DETAIL_PROGRAM:
+                    print("  [AutoDetail] Running automatic detail loop...\n")
+                    parts = self._auto_detail_program(
+                        parts,
+                        f"build from folder {folder}",
+                        images=images,
+                        rounds=AUTO_DETAIL_PROGRAM_ROUNDS,
+                    )
                 self.last_parts = self._interactive_user_refine(
                     f"build from folder {folder}",
                     parts,
                     images=images,
                 )
                 self.last_request = f"build from folder {folder}"
+                self.last_images = images
                 print("  Done.\n")
                 continue
 
@@ -2049,6 +2558,19 @@ class FusionAIAssistant:
                 if not parts:
                     print("  Error: no parts from image. Try another photo or describe in text.\n")
                     continue
+                if ENABLE_DETAILING_PASS:
+                    print("  [Step A2] Detail pass: enriching functional geometry...\n")
+                    try:
+                        detailed = self._detail_model_parts(
+                            parts,
+                            f"Object context: build from image {path_str}",
+                            images=images,
+                            max_parts=DETAILING_MAX_PARTS,
+                        )
+                        if detailed:
+                            parts = detailed
+                    except Exception:
+                        pass
                 print(f"  Architect produced {len(parts)} parts from image:")
                 for p in parts:
                     print(f"    - {p['name']:30s}  X[{p['x_min']:7.1f},{p['x_max']:7.1f}]"
@@ -2065,12 +2587,21 @@ class FusionAIAssistant:
                     print()
                 print("  [Execute] Building in Fusion 360...\n")
                 self.execute_plan(steps)
+                if ENABLE_AUTO_DETAIL_PROGRAM:
+                    print("  [AutoDetail] Running automatic detail loop...\n")
+                    parts = self._auto_detail_program(
+                        parts,
+                        f"build from image {path_str}",
+                        images=images,
+                        rounds=AUTO_DETAIL_PROGRAM_ROUNDS,
+                    )
                 self.last_parts = self._interactive_user_refine(
                     f"build from image {path_str}",
                     parts,
                     images=images,
                 )
                 self.last_request = f"build from image {path_str}"
+                self.last_images = images
                 print("  Done.\n")
                 continue
 
@@ -2130,6 +2661,7 @@ class FusionAIAssistant:
                     # No bbox-based review for reconstructed CAD sequences.
                     self.last_parts = []
                     self.last_request = f"build model {model_id}"
+                    self.last_images = []
                     continue
 
                 # Fallback: bbox replay (works for simple curated box-like models only).
@@ -2149,6 +2681,7 @@ class FusionAIAssistant:
                 self.execute_plan(steps)
                 self.last_parts = self._interactive_user_refine(f"build model {model_id}", parts)
                 self.last_request = f"build model {model_id}"
+                self.last_images = []
                 print()
                 continue
 
@@ -2211,8 +2744,17 @@ class FusionAIAssistant:
             # --- Execute in Fusion 360 ---
             print("  [Execute] Building in Fusion 360...\n")
             self.execute_plan(steps)
+            if ENABLE_AUTO_DETAIL_PROGRAM:
+                print("  [AutoDetail] Running automatic detail loop...\n")
+                parts = self._auto_detail_program(
+                    parts,
+                    command_input,
+                    images=None,
+                    rounds=AUTO_DETAIL_PROGRAM_ROUNDS,
+                )
             self.last_parts = self._interactive_user_refine(command_input, parts)
             self.last_request = command_input
+            self.last_images = []
             print()
 
 
