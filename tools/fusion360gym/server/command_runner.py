@@ -93,6 +93,10 @@ class CommandRunner():
                 result = self.sketch_extrusion.close_profile(data)
             elif command == "add_extrude":
                 result = self.sketch_extrusion.add_extrude(data)
+            elif command == "find_entity_by_name":
+                result = self.sketch_extrusion.find_entity_by_name(data)
+            elif command == "update_extrude":
+                result = self.sketch_extrusion.update_extrude(data)
             elif command == "set_target":
                 result = self.face_extrusion.set_target(data)
             elif command == "revert_to_target":

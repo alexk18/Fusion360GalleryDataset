@@ -27,14 +27,35 @@ importlib.reload(match)
 class CommandSketchExtrusion(CommandBase):
 
     def add_sketch(self, data):
-        """Add a sketch to the existing design"""
+        """Add a sketch or return existing one by name (ensure semantics). Optional sketch_name for durable identification."""
         if data is None or "sketch_plane" not in data:
             return self.runner.return_failure("sketch_plane not specified")
+        sketch_name_requested = None
+        if isinstance(data.get("sketch_name"), str) and data["sketch_name"].strip():
+            sketch_name_requested = data["sketch_name"].strip()
+        comp = self.design_state.reconstruction.component
+        sketches = comp.sketches
+        if sketch_name_requested:
+            existing = match.sketch_by_name(sketch_name_requested, sketches)
+            if existing is not None:
+                sketch_uuid = name.get_uuid(existing)
+                if sketch_uuid is None:
+                    sketch_uuid = name.set_uuid(existing)
+                # Risk D: We do not reset self.state for this sketch; caller must not assume
+                # they can build a new profile by appending add_point/add_line (edit only via update_extrude).
+                return self.runner.return_success({
+                    "sketch_id": sketch_uuid,
+                    "sketch_name": existing.name
+                })
         sketch_plane = self.__resolve_sketch_plane(data["sketch_plane"])
         if sketch_plane is None:
             return self.runner.return_failure("sketch_plane could not be found")
-        sketches = self.design_state.reconstruction.component.sketches
         sketch = sketches.addWithoutEdges(sketch_plane)
+        if sketch_name_requested:
+            try:
+                sketch.name = sketch_name_requested
+            except Exception:
+                pass
         sketch_uuid = name.set_uuid(sketch)
         return self.runner.return_success({
             "sketch_id": sketch_uuid,
@@ -195,7 +216,7 @@ class CommandSketchExtrusion(CommandBase):
         )
 
     def add_extrude(self, data):
-        """Add an extrude feature from a sketch"""
+        """Add an extrude feature from a sketch. Optional feature_name for durable identification."""
         if (data is None or "sketch_name" not in data or
                 "profile_id" not in data or "distance" not in data or
                 "operation" not in data):
@@ -220,6 +241,11 @@ class CommandSketchExtrusion(CommandBase):
         extent_distance = adsk.fusion.DistanceExtentDefinition.create(distance)
         extrude_input.setOneSideExtent(extent_distance, adsk.fusion.ExtentDirections.PositiveExtentDirection)
         extrude = extrudes.add(extrude_input)
+        if isinstance(data.get("feature_name"), str) and data["feature_name"].strip():
+            try:
+                extrude.name = data["feature_name"].strip()
+            except Exception:
+                pass
         # Serialize the data and return
         return self.return_extrude_data(extrude)
 
@@ -350,3 +376,73 @@ class CommandSketchExtrusion(CommandBase):
         # Increment by 2 as we are adding a curve
         state["pt_count"] += 2
         state["transform"] = transform
+
+    def find_entity_by_name(self, data):
+        """Find an entity (Sketch, ExtrudeFeature, etc.) by name for stateful editing.
+        Returns found, count. If count > 1, treat as error (duplicate names)."""
+        if data is None or "type" not in data or "name" not in data:
+            return self.runner.return_failure("find_entity_by_name requires type and name")
+        entity_type = (data.get("type") or "").strip()
+        entity_name = (data.get("name") or "").strip()
+        if not entity_name:
+            return self.runner.return_success({"found": False, "count": 0})
+        comp = self.design_state.reconstruction.component
+        count = 0
+        if entity_type == "Sketch":
+            for i in range(comp.sketches.count):
+                sk = comp.sketches.item(i)
+                if getattr(sk, "name", None) == entity_name:
+                    count += 1
+            found = count > 0
+        elif entity_type == "ExtrudeFeature":
+            for i in range(comp.features.extrudeFeatures.count):
+                feat = comp.features.extrudeFeatures.item(i)
+                if getattr(feat, "name", None) == entity_name:
+                    count += 1
+            found = count > 0
+        else:
+            return self.runner.return_failure(f"Unknown entity type: {entity_type}")
+        if count > 1:
+            return self.runner.return_failure(
+                f"Duplicate entity name: '{entity_name}' found {count} times (type={entity_type}). Rename to ensure uniqueness."
+            )
+        return self.runner.return_success({"found": found, "count": count})
+
+    def update_extrude(self, data):
+        """Update an extrude feature's distance by feature name (stateful edit).
+        Only supports DistanceExtentDefinition; rejects negative distance."""
+        if data is None or "feature_name" not in data or "distance" not in data:
+            return self.runner.return_failure("update_extrude requires feature_name and distance")
+        feature_name = (data.get("feature_name") or "").strip()
+        distance = float(data.get("distance", 0))
+        if not feature_name:
+            return self.runner.return_failure("feature_name is empty")
+        if distance < 0:
+            return self.runner.return_failure(
+                "update_extrude: negative distance not supported; use positive distance (extrusion direction is fixed)"
+            )
+        comp = self.design_state.reconstruction.component
+        extrude_feature = None
+        for i in range(comp.features.extrudeFeatures.count):
+            feat = comp.features.extrudeFeatures.item(i)
+            if getattr(feat, "name", None) == feature_name:
+                extrude_feature = feat
+                break
+        if extrude_feature is None:
+            return self.runner.return_failure(f"Extrude feature not found: {feature_name}")
+        try:
+            extent_one = extrude_feature.extentOne
+            if extent_one is None:
+                return self.runner.return_failure("Extrude feature has no extentOne")
+            if not isinstance(extent_one, adsk.fusion.DistanceExtentDefinition):
+                return self.runner.return_failure(
+                    "update_extrude only supports distance-based extents; current extent type is unsupported"
+                )
+            extrude_feature.timelineObject.rollTo(True)
+            distance_value = adsk.core.ValueInput.createByReal(distance)
+            extent_def = adsk.fusion.DistanceExtentDefinition.create(distance_value)
+            extrude_feature.extentOne = extent_def
+            self.design_state.refresh()
+            return self.return_extrude_data(extrude_feature)
+        except Exception as ex:
+            return self.runner.return_failure(f"update_extrude failed: {ex}")

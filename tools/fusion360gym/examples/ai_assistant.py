@@ -1,11 +1,11 @@
-"""
-Fusion 360 AI Assistant — two-step pipeline with deterministic encoder.
+﻿"""
+Fusion 360 AI Assistant вЂ” two-step pipeline with deterministic encoder.
 
 Architecture:
-  1. Architect LLM: text → 3D bounding boxes (chain-of-thought decomposition)
-  2. Deterministic encoder: bounding boxes → Fusion 360 Gym JSON commands
-  3. Fusion 360 Gym: execute commands → live 3D model
-  4. Visual feedback: screenshot → VLM review → fix loop
+  1. Architect LLM: text в†’ 3D bounding boxes (chain-of-thought decomposition)
+  2. Deterministic encoder: bounding boxes в†’ Fusion 360 Gym JSON commands
+  3. Fusion 360 Gym: execute commands в†’ live 3D model
+  4. Visual feedback: screenshot в†’ VLM review в†’ fix loop
 
 Usage:
   1. Launch Fusion 360 and run the Fusion 360 Gym add-in
@@ -63,9 +63,19 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
 DESIGN_INDEX_FILE = os.environ.get("DESIGN_INDEX_FILE", "design_index.json")
 DESIGN_INDEX_PATH = os.path.join(os.path.dirname(__file__), DESIGN_INDEX_FILE)
+TRACK_DESIGN_INDEX_FILE = os.environ.get("TRACK_DESIGN_INDEX_FILE", "").strip()
+TRACK_DESIGN_INDEX_PATH = (
+    os.path.join(os.path.dirname(__file__), TRACK_DESIGN_INDEX_FILE)
+    if TRACK_DESIGN_INDEX_FILE
+    else ""
+)
 # Cap number of designs loaded into memory (0 = no cap). Use when index is huge.
 DESIGN_INDEX_MAX_ENTRIES = int(os.environ.get("DESIGN_INDEX_MAX_ENTRIES", "0"))
 RECON_DATASET_ROOT = os.environ.get("RECON_DATASET_ROOT", r"e:\Work\Fusion360\datasets\r1.0.1")
+ASSEMBLY_DATASET_ROOT = os.environ.get(
+    "ASSEMBLY_DATASET_ROOT",
+    os.path.join(os.path.dirname(__file__), "..", "..", "testdata", "assembly_examples")
+)
 SERVER_LAUNCH_PATH = os.path.join(os.path.dirname(__file__), "..", "server", "launch.py")
 STEP_REPLAY_DELAY = float(os.environ.get("STEP_REPLAY_DELAY", "0.8"))
 
@@ -76,7 +86,7 @@ MULTIVIEW_BEST_OF_N_CANDIDATES = int(
 MULTIVIEW_MIN_CONFIRM_VIEWS = int(os.environ.get("MULTIVIEW_MIN_CONFIRM_VIEWS", "2"))
 
 # ---------------------------------------------------------------------------
-# Architect prompt — LLM decomposes objects into 3D bounding boxes
+# Architect prompt вЂ” LLM decomposes objects into 3D bounding boxes
 # ---------------------------------------------------------------------------
 
 ARCHITECT_PROMPT = r"""You are a CAD decomposition engine.
@@ -98,6 +108,8 @@ Hard requirements:
 4) Keep left/right symmetry around X when appropriate.
 5) Use floor at Z=0 for the final model (avoid negative Z).
 6) Stay within realistic object proportions from the user request / brief.
+7) For side/vertical details you may set optional "plane": "XY"|"XZ"|"YZ".
+   Use "XZ"/"YZ" when XY-only extrusion would misorient the part.
 
 Adjacency rule:
 - Parts that touch in reality should share faces or have near-zero gap.
@@ -172,19 +184,24 @@ Task:
 
 Allowed actions:
 - refresh
-- build (rect or circle extrude only)
+- build (rect, circle, polygon, ring, gear extrude)
 
 Build step schema:
 {
   "action": "build",
   "description": "name",
-  "plane": "XY" or "XY@<z_offset_cm>",
+  "plane": "XY|XZ|YZ" or "<PLANE>@<offset_cm>",
   "shape": "rect" or "circle",
   "cx": number,
   "cy": number,
   "w": number,      // required for rect
   "h": number,      // required for rect
   "radius": number, // required for circle
+  "sides": number,  // required for polygon (>=3)
+  "outer_radius": number, // required for ring/gear
+  "inner_radius": number, // required for ring/gear
+  "tooth_count": number,  // required for gear (>=6 recommended)
+  "rotation_deg": number, // optional for polygon/gear
   "distance": number,
   "operation": "NewBodyFeatureOperation" or "JoinFeatureOperation" or "CutFeatureOperation",
   "repeat": number,  // optional >=1
@@ -197,8 +214,13 @@ Rules:
 - Do NOT clear or rebuild the full model.
 - Keep steps count small and impactful.
 - Prefer grouped functional details (e.g. track block groups, wheel groups, vents).
+- Use circle/ring/gear/polygon when mechanical detail is needed (holes, hubs, sprockets, perforation patterns).
 - Keep dimensions realistic relative to existing model bounds.
 - If uncertain, output fewer safer steps.
+- Use plane orientation intentionally:
+  XY extrudes along +Z, XZ extrudes along +Y, YZ extrudes along +X.
+- Prefer Join/NewBody for additive detail.
+- Use Cut only for explicit cutouts (holes, slots, ports, vents) and only when clearly intersecting an existing body.
 
 Return ONLY JSON:
 {"steps":[...]}
@@ -231,6 +253,16 @@ Return ONLY JSON:
 }
 """
 
+ASSEMBLY_MECHANICAL_PRIORS = r"""Assembly reasoning priors for mechanical details:
+- Preserve global frame; do not shift the whole model when adding details.
+- Keep coaxial elements aligned (shaft-hole, hub-ring, sprocket-track).
+- Keep bilateral symmetry for left/right repeated mechanisms unless context says otherwise.
+- Place repeated elements with regular spacing and consistent size.
+- Prefer functional groups: wheel sets, sprockets, idlers, hinge pairs, bolt rows, vent arrays.
+- Keep added features near supporting parent parts, not floating in free space.
+- Use cut operations for holes/ports and join/new-body for protrusions.
+"""
+
 EXTEND_REVISION_PROMPT = r"""The user has an EXISTING 3D model in the CAD program and wants to EXTEND or MODIFY it (add parts, change dimensions, add armrests, make back higher, etc.).
 
 You receive:
@@ -241,7 +273,7 @@ Your task: Output the COMPLETE updated parts list as a single JSON object with k
 - You MAY add new parts (e.g. armrests, new back slats).
 - You MAY remove or merge parts if the user asks.
 - You MAY change dimensions/positions of existing parts.
-- Keep the same coordinate system: floor Z=0, center X≈0, back Y≈0. Stay connected and physically plausible.
+- Keep the same coordinate system: floor Z=0, center Xв‰€0, back Yв‰€0. Stay connected and physically plausible.
 - Preserve symmetry when appropriate.
 
 Return ONLY JSON, no markdown:
@@ -265,7 +297,7 @@ If the model looks correct, respond:
 {{"satisfied": true, "comment": "Brief assessment"}}
 
 If it needs fixes, describe WHAT is wrong in plain text. Do NOT generate coordinates
-or build commands — just explain the problems clearly.
+or build commands вЂ” just explain the problems clearly.
 {{"satisfied": false, "comment": "Detailed description of what is wrong and how to fix it"}}
 
 Return ONLY JSON. No markdown."""
@@ -300,7 +332,7 @@ Return ONLY JSON, no markdown:
   ]
 }
 Optional "features": only add if the object has leaning or splayed elements (e.g. chair backrest leaning back, splayed legs).
-- tilt: use primary_axis "x" for backward/forward lean (YZ plane), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0–12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
+- tilt: use primary_axis "x" for backward/forward lean (YZ plane), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ“12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
 - Omit "features" or use [] if no such elements.
 """
 
@@ -333,7 +365,7 @@ Return ONLY JSON, no markdown:
   ]
 }
 Optional "features": only add if the object has leaning or splayed elements (e.g. chair backrest leaning back).
-- tilt: primary_axis "x" for backward/forward (YZ), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0–12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
+- tilt: primary_axis "x" for backward/forward (YZ), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ“12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
 - Omit "features" or use [] if none.
 """
 
@@ -391,7 +423,7 @@ Return ONLY JSON:
 
 
 # ---------------------------------------------------------------------------
-# Design Index — few-shot retrieval from curated / dataset examples
+# Design Index вЂ” few-shot retrieval from curated / dataset examples
 # ---------------------------------------------------------------------------
 
 class DesignIndex:
@@ -464,14 +496,15 @@ class DesignIndex:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic encoder — bounding boxes → Fusion 360 Gym JSON plan
+# Deterministic encoder вЂ” bounding boxes в†’ Fusion 360 Gym JSON plan
 # ---------------------------------------------------------------------------
 
 def encode_bboxes_to_plan(parts, include_clear=True, include_refresh=False):
     """Convert a list of 3D bounding boxes into Fusion 360 Gym build steps.
 
     Each part is a dict with: name, x_min, x_max, y_min, y_max, z_min, z_max.
-    The encoder uses XY offset planes (XY@z_min) and extrudes +Z by box height.
+    Optional part["plane"] (XY/XZ/YZ) is supported. If missing, plane is inferred
+    from bbox dimensions (smallest axis is used as extrusion direction).
     When include_clear is True, the first step is refresh (fit camera) so the view is usable during build.
     """
     steps = []
@@ -490,7 +523,7 @@ def encode_bboxes_to_plan(parts, include_clear=True, include_refresh=False):
 
 
 def _encode_single_bbox(part):
-    """Convert one absolute 3D bbox into a stable XY@offset build step."""
+    """Convert one absolute 3D bbox into a stable plane-aware build step."""
     name = part.get("name", "unnamed")
     x0, x1 = part["x_min"], part["x_max"]
     y0, y1 = part["y_min"], part["y_max"]
@@ -503,8 +536,61 @@ def _encode_single_bbox(part):
     if wx < 0.01 or wy < 0.01 or wz < 0.01:
         return None
 
-    # Stable default for demo mode:
-    # sketch on XY plane offset to z_min, then extrude +Z by height.
+    plane_raw = str(part.get("plane", "")).strip().upper()
+    if "@" in plane_raw:
+        plane_raw = plane_raw.split("@", 1)[0].strip()
+    plane = plane_raw if plane_raw in ("XY", "XZ", "YZ") else None
+
+    # Fallback: choose plane so extrusion follows the smallest bbox axis.
+    if plane is None:
+        axis_to_plane = {"x": "YZ", "y": "XZ", "z": "XY"}
+        smallest_axis = min((("x", wx), ("y", wy), ("z", wz)), key=lambda kv: kv[1])[0]
+        plane = axis_to_plane[smallest_axis]
+
+    def choose_circle_shape(part_name, a, b, depth):
+        n = str(part_name or "").lower()
+        a = abs(float(a))
+        b = abs(float(b))
+        depth = abs(float(depth))
+        if min(a, b, depth) <= 0.01:
+            return False
+        roundness = max(a, b) / max(0.01, min(a, b))
+        cyl_keywords = (
+            "wheel", "idler", "roller", "sprocket", "pulley", "hub", "axle",
+            "shaft", "pipe", "tube", "barrel", "cylinder", "bearing", "ring",
+            "колес", "катк", "ролик", "ось", "вал", "труб", "ствол", "цилинд",
+        )
+        has_kw = any(k in n for k in cyl_keywords)
+        rod_like = depth >= 1.6 * ((a + b) * 0.5)
+        return roundness <= 1.35 and (has_kw or rod_like)
+
+    if plane == "XZ":
+        shape = "circle" if choose_circle_shape(name, wx, wz, wy) else "rect"
+        return _make_step(
+            name=name,
+            plane=f"XZ@{round(y0, 3)}",
+            cx=(x0 + x1) / 2,
+            cy=(z0 + z1) / 2,
+            w=wx,
+            h=wz,
+            distance=wy,
+            shape=shape,
+        )
+    if plane == "YZ":
+        shape = "circle" if choose_circle_shape(name, wy, wz, wx) else "rect"
+        return _make_step(
+            name=name,
+            plane=f"YZ@{round(x0, 3)}",
+            cx=(y0 + y1) / 2,
+            cy=(z0 + z1) / 2,
+            w=wy,
+            h=wz,
+            distance=wx,
+            shape=shape,
+        )
+
+    # Default XY.
+    shape = "circle" if choose_circle_shape(name, wx, wy, wz) else "rect"
     return _make_step(
         name=name,
         plane=f"XY@{round(z0, 3)}",
@@ -513,22 +599,27 @@ def _encode_single_bbox(part):
         w=wx,
         h=wy,
         distance=wz,
+        shape=shape,
     )
 
 
-def _make_step(name, plane, cx, cy, w, h, distance):
-    return {
+def _make_step(name, plane, cx, cy, w, h, distance, shape="rect"):
+    step = {
         "action": "build",
         "description": name,
         "plane": plane,
-        "shape": "rect",
+        "shape": shape,
         "cx": round(cx, 1),
         "cy": round(cy, 1),
-        "w": round(w, 1),
-        "h": round(h, 1),
         "distance": round(distance, 1),
         "operation": "NewBodyFeatureOperation",
     }
+    if shape == "circle":
+        step["radius"] = round(max(0.1, min(float(w), float(h)) * 0.5), 1)
+    else:
+        step["w"] = round(w, 1)
+        step["h"] = round(h, 1)
+    return step
 
 
 # ---------------------------------------------------------------------------
@@ -578,12 +669,68 @@ class FusionAIAssistant:
         self.llm = llm_client
         self.model = get_model_name()
         self.index = DesignIndex(DESIGN_INDEX_PATH)
+        self.track_index = DesignIndex(TRACK_DESIGN_INDEX_PATH) if TRACK_DESIGN_INDEX_PATH else None
         self.review_enabled = ENABLE_VISUAL_REVIEW
         self.last_parts = []
         self.last_request = ""
         self.last_images = []
         self.recon_root = Path(RECON_DATASET_ROOT)
+        self.assembly_root = Path(ASSEMBLY_DATASET_ROOT)
         self._recon_file_cache = {}
+        self._assembly_summary_cache = {}
+
+    @staticmethod
+    def _is_track_query(text):
+        hay = str(text or "").lower()
+        return any(
+            k in hay for k in (
+                "track", "tank", "caterpillar", "crawler", "sprocket", "idler",
+                "гусениц", "гусеница", "трак", "танк",
+            )
+        )
+
+    def _find_reference_designs(self, query, top_k=2):
+        wanted = max(1, int(top_k))
+        picked = []
+        seen = set()
+
+        def add_candidates(cands):
+            for d in cands:
+                key = (
+                    str(d.get("source_file", "")).strip().lower(),
+                    str(d.get("description", "")).strip().lower(),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                picked.append(d)
+                if len(picked) >= wanted:
+                    break
+
+        if self.track_index is not None and self._is_track_query(query):
+            add_candidates(self.track_index.find_similar(query, top_k=max(2, wanted)))
+        if len(picked) < wanted:
+            add_candidates(self.index.find_similar(query, top_k=max(2, wanted)))
+        return picked[:wanted]
+
+    def _find_exact_model_any(self, token):
+        d = self.index.find_exact_model(token)
+        if d is not None:
+            return d
+        if self.track_index is not None:
+            d = self.track_index.find_exact_model(token)
+        return d
+
+    @staticmethod
+    def _track_architect_addendum():
+        return (
+            "Track-specific decomposition constraints:\n"
+            "- Include left/right drive wheel and idler wheel as explicit separate parts.\n"
+            "- Include at least 4 road wheel placeholders per side (can be grouped as road_wheels_left_1..N and right_1..N).\n"
+            "- Side mechanisms (track side frames, wheels) should prefer plane \"YZ\".\n"
+            "- Keep strong left/right symmetry and keep all wheel centers aligned along Z where appropriate.\n"
+            "- Do not collapse all wheels into one giant box."
+        )
 
     def check_connection(self):
         try:
@@ -819,10 +966,10 @@ class FusionAIAssistant:
             )
             return response.choices[0].message.content
 
-    # -- Step A: Architect — decompose into bounding boxes --------------------
+    # -- Step A: Architect вЂ” decompose into bounding boxes --------------------
 
     def decompose_object(self, user_request):
-        similar = self.index.find_similar(user_request)
+        similar = self._find_reference_designs(user_request, top_k=2)
         few_shot = self.index.format_few_shot(similar)
 
         if similar:
@@ -832,7 +979,7 @@ class FusionAIAssistant:
         format_hint = (
             '{"parts": [\n'
             '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
             '  ...\n'
             ']}'
         )
@@ -841,9 +988,15 @@ class FusionAIAssistant:
         prompt = prompt.replace("{few_shot_section}", few_shot if few_shot else "")
 
         request = f'Decompose this object into 3D blocks: "{user_request}"'
+        if self._is_track_query(user_request):
+            request += "\n\n" + self._track_architect_addendum()
         best_payload = None
         best_score = float("-inf")
         attempts = max(1, BEST_OF_N_CANDIDATES)
+        if self._is_track_query(user_request):
+            attempts = max(attempts, 6)
+        else:
+            attempts = max(attempts, 4)
         for _ in range(attempts):
             raw = self._call_llm(prompt, request)
             payload = self._parse_json(raw)
@@ -852,7 +1005,11 @@ class FusionAIAssistant:
             if score > best_score:
                 best_score = score
                 best_payload = {"parts": parts}
-        return best_payload or {"parts": []}
+        parts = (best_payload or {"parts": []}).get("parts", [])
+        if not parts:
+            return {"parts": []}
+        repaired = self._repair_parts_with_audit(user_request, parts)
+        return {"parts": repaired}
 
     def decompose_from_image(self, image_b64, media_type="image/png"):
         return self.decompose_from_images(
@@ -882,7 +1039,7 @@ class FusionAIAssistant:
             format_hint = (
                 '{"parts": [\n'
                 '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-                '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+                '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
                 '  ...\n'
                 ']}'
             )
@@ -1004,7 +1161,7 @@ class FusionAIAssistant:
         format_hint = (
             '{"parts": [\n'
             '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
             '  ...\n'
             ']}'
         )
@@ -1110,7 +1267,7 @@ class FusionAIAssistant:
 
     def _find_template_design(self, object_type, design_brief):
         query = f"{object_type} {design_brief}".strip()
-        candidates = self.index.find_similar(query, top_k=1)
+        candidates = self._find_reference_designs(query, top_k=1)
         if candidates:
             return candidates[0]
         t = (object_type or "").strip().lower()
@@ -1152,11 +1309,43 @@ class FusionAIAssistant:
         final_parts = self._sanitize_parts(out, target_dims=target_dims, symmetry=symmetry)
         return self._limit_parts_for_stability(final_parts, max_parts=12)
 
-    # -- Step B: Deterministic encoder — bboxes → Gym commands ----------------
+    # -- Step B: Deterministic encoder вЂ” bboxes в†’ Gym commands ----------------
 
     @staticmethod
     def encode(parts, include_clear=True):
         return encode_bboxes_to_plan(parts, include_clear)
+
+    @staticmethod
+    def _format_build_step_line(step):
+        def fnum(v, default=0.0):
+            try:
+                return float(v)
+            except Exception:
+                return float(default)
+        shape = str(step.get("shape", "rect")).lower()
+        base = (
+            f"{step.get('description', 'part'):30s}  {step.get('plane', 'XY')}  "
+            f"cx={fnum(step.get('cx', 0.0)):6.1f}  cy={fnum(step.get('cy', 0.0)):6.1f}  "
+        )
+        if shape == "circle":
+            return base + f"r={fnum(step.get('radius', 0.0)):6.1f}  d={fnum(step.get('distance', 0.0)):7.1f}"
+        if shape == "polygon":
+            return (
+                base +
+                f"r={fnum(step.get('radius', 0.0)):6.1f}  n={int(fnum(step.get('sides', 0), 0))}  "
+                f"d={fnum(step.get('distance', 0.0)):7.1f}"
+            )
+        if shape in ("ring", "gear"):
+            return (
+                base +
+                f"ro={fnum(step.get('outer_radius', 0.0)):5.1f}  ri={fnum(step.get('inner_radius', 0.0)):5.1f}  "
+                f"d={fnum(step.get('distance', 0.0)):7.1f}"
+            )
+        return (
+            base +
+            f"w={fnum(step.get('w', 0.0)):6.1f}  h={fnum(step.get('h', 0.0)):6.1f}  "
+            f"d={fnum(step.get('distance', 0.0)):7.1f}"
+        )
 
     # -- intent: extend existing vs build new ---------------------------------
 
@@ -1167,15 +1356,15 @@ class FusionAIAssistant:
             return "new"
         text = (user_input or "").strip().lower()
         extend_cues = (
-            "add ", "добавь", "extend", "to existing", "to current", "to the current",
+            "add ", "РґРѕР±Р°РІСЊ", "extend", "to existing", "to current", "to the current",
             "also add", "make the ", "change the ", "modify", "higher", "longer", "wider",
-            "дострой", "дополни", "ещё ", "подлокотник", "ручки", "на текущ", "к текущ",
-            "в текущ", "текущую ", "текущий ", "эту модель", "этот ", "существующ",
-            "на этом", "к этому", "armrest", "backrest", "спинку", "сиденье выше",
+            "РґРѕСЃС‚СЂРѕР№", "РґРѕРїРѕР»РЅРё", "РµС‰С‘ ", "РїРѕРґР»РѕРєРѕС‚РЅРёРє", "СЂСѓС‡РєРё", "РЅР° С‚РµРєСѓС‰", "Рє С‚РµРєСѓС‰",
+            "РІ С‚РµРєСѓС‰", "С‚РµРєСѓС‰СѓСЋ ", "С‚РµРєСѓС‰РёР№ ", "СЌС‚Сѓ РјРѕРґРµР»СЊ", "СЌС‚РѕС‚ ", "СЃСѓС‰РµСЃС‚РІСѓСЋС‰",
+            "РЅР° СЌС‚РѕРј", "Рє СЌС‚РѕРјСѓ", "armrest", "backrest", "СЃРїРёРЅРєСѓ", "СЃРёРґРµРЅСЊРµ РІС‹С€Рµ",
         )
         new_cues = (
-            "from scratch", "с нуля", "заново", "new ", "another ", "different ",
-            "новый ", "другой ", "build a new", "create a new", "start over",
+            "from scratch", "СЃ РЅСѓР»СЏ", "Р·Р°РЅРѕРІРѕ", "new ", "another ", "different ",
+            "РЅРѕРІС‹Р№ ", "РґСЂСѓРіРѕР№ ", "build a new", "create a new", "start over",
         )
         for c in new_cues:
             if c in text:
@@ -1195,7 +1384,7 @@ class FusionAIAssistant:
         format_hint = (
             '{"parts": [\n'
             '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
             '  ...\n'
             ']}'
         )
@@ -1210,7 +1399,7 @@ class FusionAIAssistant:
         parts = out.get("parts", [])
         if not parts:
             return []
-        parts = self._sanitize_parts(parts)
+        parts = self._sanitize_parts(parts, normalize_frame=False)
         return self._limit_parts_for_stability(parts, max_parts=max(12, len(current_parts) + 4))
 
     def _detail_model_parts(self, current_parts, user_request, images=None, max_parts=None):
@@ -1225,7 +1414,7 @@ class FusionAIAssistant:
         format_hint = (
             '{"parts": [\n'
             '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
             '  ...\n'
             ']}'
         )
@@ -1244,21 +1433,26 @@ class FusionAIAssistant:
         parts = out.get("parts", [])
         if not parts:
             return []
-        parts = self._sanitize_parts(parts)
+        parts = self._sanitize_parts(parts, normalize_frame=False)
         cap = max_parts if isinstance(max_parts, int) and max_parts > 0 else max(16, len(current_parts) + 8)
         return self._limit_parts_for_stability(parts, max_parts=cap)
 
     @staticmethod
-    def _parse_xy_plane_offset(plane):
+    def _parse_plane_and_offset(plane):
         s = str(plane or "XY").strip().upper()
-        if s == "XY":
-            return 0.0
-        if s.startswith("XY@"):
+        if "@" in s:
+            base, raw = s.split("@", 1)
+            base = base.strip()
             try:
-                return float(s.split("@", 1)[1])
+                off = float(raw)
             except Exception:
-                return 0.0
-        return 0.0
+                off = 0.0
+        else:
+            base, off = s, 0.0
+        if base not in ("XY", "XZ", "YZ"):
+            base = "XY"
+            off = 0.0
+        return base, off
 
     def _steps_to_bboxes(self, steps):
         out = []
@@ -1266,7 +1460,7 @@ class FusionAIAssistant:
             if str(st.get("action", "")).lower() != "build":
                 continue
             shape = str(st.get("shape", "rect")).lower()
-            base_z0 = self._parse_xy_plane_offset(st.get("plane", "XY"))
+            plane_base, plane_off = self._parse_plane_and_offset(st.get("plane", "XY"))
             repeat = int(max(1, min(32, self._to_float(st.get("repeat"), 1))))
             dx_rep = self._to_float(st.get("dx"), 0.0)
             dy_rep = self._to_float(st.get("dy"), 0.0)
@@ -1278,32 +1472,67 @@ class FusionAIAssistant:
             base_cx = self._to_float(st.get("cx"), 0.0)
             base_cy = self._to_float(st.get("cy"), 0.0)
             for r_idx in range(repeat):
-                z0 = base_z0 + dz_rep * r_idx
-                z1 = z0 + dist
+                off = plane_off + dz_rep * r_idx
+                off1 = off + dist
                 cx = base_cx + dx_rep * r_idx
                 cy = base_cy + dy_rep * r_idx
                 item_name = f"{name}_{r_idx+1}" if repeat > 1 else name
-                if shape == "circle":
-                    rad = abs(self._to_float(st.get("radius"), 0.0))
+                if shape in ("circle", "ring", "gear", "polygon"):
+                    if shape == "circle":
+                        rad = abs(self._to_float(st.get("radius"), 0.0))
+                    elif shape == "polygon":
+                        rad = abs(self._to_float(st.get("radius"), 0.0))
+                    else:
+                        rad = abs(self._to_float(st.get("outer_radius"), 0.0))
                     if rad <= 0.1:
                         continue
-                    out.append({
-                        "name": item_name,
-                        "x_min": cx - rad, "x_max": cx + rad,
-                        "y_min": cy - rad, "y_max": cy + rad,
-                        "z_min": min(z0, z1), "z_max": max(z0, z1),
-                    })
+                    if plane_base == "XY":
+                        out.append({
+                            "name": item_name,
+                            "x_min": cx - rad, "x_max": cx + rad,
+                            "y_min": cy - rad, "y_max": cy + rad,
+                            "z_min": min(off, off1), "z_max": max(off, off1),
+                        })
+                    elif plane_base == "XZ":
+                        out.append({
+                            "name": item_name,
+                            "x_min": cx - rad, "x_max": cx + rad,
+                            "y_min": min(off, off1), "y_max": max(off, off1),
+                            "z_min": cy - rad, "z_max": cy + rad,
+                        })
+                    else:  # YZ
+                        out.append({
+                            "name": item_name,
+                            "x_min": min(off, off1), "x_max": max(off, off1),
+                            "y_min": cx - rad, "y_max": cx + rad,
+                            "z_min": cy - rad, "z_max": cy + rad,
+                        })
                 else:
                     w = abs(self._to_float(st.get("w"), 0.0))
                     h = abs(self._to_float(st.get("h"), 0.0))
                     if w <= 0.1 or h <= 0.1:
                         continue
-                    out.append({
-                        "name": item_name,
-                        "x_min": cx - w / 2.0, "x_max": cx + w / 2.0,
-                        "y_min": cy - h / 2.0, "y_max": cy + h / 2.0,
-                        "z_min": min(z0, z1), "z_max": max(z0, z1),
-                    })
+                    if plane_base == "XY":
+                        out.append({
+                            "name": item_name,
+                            "x_min": cx - w / 2.0, "x_max": cx + w / 2.0,
+                            "y_min": cy - h / 2.0, "y_max": cy + h / 2.0,
+                            "z_min": min(off, off1), "z_max": max(off, off1),
+                        })
+                    elif plane_base == "XZ":
+                        out.append({
+                            "name": item_name,
+                            "x_min": cx - w / 2.0, "x_max": cx + w / 2.0,
+                            "y_min": min(off, off1), "y_max": max(off, off1),
+                            "z_min": cy - h / 2.0, "z_max": cy + h / 2.0,
+                        })
+                    else:  # YZ
+                        out.append({
+                            "name": item_name,
+                            "x_min": min(off, off1), "x_max": max(off, off1),
+                            "y_min": cx - w / 2.0, "y_max": cx + w / 2.0,
+                            "z_min": cy - h / 2.0, "z_max": cy + h / 2.0,
+                        })
         return out
 
     def _summarize_reconstruction_json(self, json_path):
@@ -1346,7 +1575,8 @@ class FusionAIAssistant:
 
     def _dataset_action_hints(self, query, top_k=2):
         hints = []
-        for d in self.index.find_similar(query, top_k=top_k):
+        local_top_k = max(top_k, 4) if self._is_track_query(query) else top_k
+        for d in self._find_reference_designs(query, top_k=local_top_k):
             src = str(d.get("source_file", "")).strip()
             rec_summary = {}
             p = self.find_reconstruction_json(src) if src else None
@@ -1360,11 +1590,173 @@ class FusionAIAssistant:
             })
         return hints
 
+    def _iter_assembly_json_files(self, max_files=200):
+        if not self.assembly_root.exists():
+            return []
+        files = []
+        try:
+            for p in self.assembly_root.rglob("assembly.json"):
+                if p.is_file():
+                    files.append(p)
+                    if len(files) >= max_files:
+                        break
+        except Exception:
+            return []
+        return files
+
+    def _summarize_assembly_json(self, assembly_json):
+        key = str(assembly_json)
+        if key in self._assembly_summary_cache:
+            return self._assembly_summary_cache[key]
+        summary = {
+            "file": key,
+            "num_occurrences": 0,
+            "num_components": 0,
+            "num_bodies": 0,
+            "num_joints": 0,
+            "num_as_built_joints": 0,
+            "joint_types": {},
+            "num_contacts": 0,
+            "num_holes": 0,
+            "hole_types_top": [],
+        }
+        try:
+            with open(assembly_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            occ = data.get("occurrences", {}) or {}
+            comps = data.get("components", {}) or {}
+            bodies = data.get("bodies", {}) or {}
+            joints = data.get("joints", {}) or {}
+            as_built = data.get("as_built_joints", {}) or {}
+            contacts = data.get("contacts", []) or []
+            holes = data.get("holes", []) or []
+            summary["num_occurrences"] = len(occ)
+            summary["num_components"] = len(comps)
+            summary["num_bodies"] = len(bodies)
+            summary["num_joints"] = len(joints)
+            summary["num_as_built_joints"] = len(as_built)
+            summary["num_contacts"] = len(contacts)
+            summary["num_holes"] = len(holes)
+
+            jt = {}
+            for j in list(joints.values()) + list(as_built.values()):
+                if not isinstance(j, dict):
+                    continue
+                motion = j.get("joint_motion", {}) or {}
+                jtype = str(motion.get("joint_type", "Unknown")).strip()
+                jt[jtype] = jt.get(jtype, 0) + 1
+            summary["joint_types"] = jt
+
+            ht = {}
+            for h in holes:
+                if not isinstance(h, dict):
+                    continue
+                htype = str(h.get("type", "Unknown")).strip()
+                ht[htype] = ht.get(htype, 0) + 1
+            top_holes = sorted(ht.items(), key=lambda kv: kv[1], reverse=True)[:6]
+            summary["hole_types_top"] = [{"type": k, "count": v} for k, v in top_holes]
+        except Exception:
+            pass
+        self._assembly_summary_cache[key] = summary
+        return summary
+
+    def _infer_joint_signature(self, query, current_parts=None):
+        text = (query or "").strip().lower()
+        part_names = " ".join(
+            str((p or {}).get("name", "")).strip().lower()
+            for p in (current_parts or [])
+        )
+        hay = f"{text} {part_names}".strip()
+
+        desired = set()
+        wants_holes = False
+        wants_contacts = False
+        wants_symmetry = False
+
+        if any(k in hay for k in ("tank", "track", "wheel", "sprocket", "idler", "vehicle", "car", "robot")):
+            desired.update(("RevoluteJointType", "CylindricalJointType"))
+            wants_holes = True
+            wants_contacts = True
+            wants_symmetry = True
+        if any(k in hay for k in ("caterpillar", "crawler", "РіСѓСЃРµРЅРёС†Р°", "РіСѓСЃРµРЅРёС†", "С‚СЂР°Рє")):
+            desired.update(("RevoluteJointType", "CylindricalJointType"))
+            wants_holes = True
+            wants_contacts = True
+            wants_symmetry = True
+        if any(k in hay for k in ("gear", "shaft", "axle", "bearing", "pulley", "rotor", "motor")):
+            desired.update(("RevoluteJointType", "CylindricalJointType"))
+            wants_holes = True
+        if any(k in hay for k in ("door", "hinge", "lid", "flap")):
+            desired.add("RevoluteJointType")
+            wants_holes = True
+        if any(k in hay for k in ("slider", "rail", "linear", "carriage")):
+            desired.add("SliderJointType")
+        if any(k in hay for k in ("ball", "socket", "gimbal")):
+            desired.add("BallJointType")
+        if any(k in hay for k in ("planar", "plate", "panel")):
+            desired.add("PlanarJointType")
+        if any(k in hay for k in ("pin", "slot")):
+            desired.add("PinSlotJointType")
+
+        # Fallback to generic mechanical prior if no explicit signature inferred.
+        if not desired:
+            desired.update(("RevoluteJointType", "RigidJointType"))
+
+        return {
+            "desired_joint_types": sorted(desired),
+            "wants_holes": wants_holes,
+            "wants_contacts": wants_contacts,
+            "wants_symmetry": wants_symmetry,
+        }
+
+    @staticmethod
+    def _score_assembly_signature_match(summary, signature):
+        jt = summary.get("joint_types", {}) or {}
+        desired = set(signature.get("desired_joint_types", []) or [])
+        score = 0.0
+        for d in desired:
+            score += 18.0 if jt.get(d, 0) > 0 else -6.0
+        if signature.get("wants_holes", False):
+            score += min(18.0, 1.6 * float(summary.get("num_holes", 0)))
+        if signature.get("wants_contacts", False):
+            score += min(16.0, 0.8 * float(summary.get("num_contacts", 0)))
+        if signature.get("wants_symmetry", False):
+            rev = float(jt.get("RevoluteJointType", 0))
+            cyl = float(jt.get("CylindricalJointType", 0))
+            score += min(12.0, (rev + cyl) * 1.2)
+        return score
+
+    def _assembly_priors_for_query(self, query, top_k=3, current_parts=None):
+        files = self._iter_assembly_json_files(max_files=400)
+        if not files:
+            return []
+        signature = self._infer_joint_signature(query, current_parts=current_parts)
+        # Heuristic ranking: prefer mechanically rich assemblies.
+        scored = []
+        for p in files:
+            s = self._summarize_assembly_json(p)
+            richness = (
+                3.0 * s.get("num_joints", 0) +
+                2.0 * s.get("num_as_built_joints", 0) +
+                1.0 * s.get("num_contacts", 0) +
+                0.8 * s.get("num_holes", 0)
+            )
+            sig_score = self._score_assembly_signature_match(s, signature)
+            total = 0.55 * richness + 0.45 * sig_score
+            row = dict(s)
+            row["signature"] = signature
+            row["signature_score"] = round(sig_score, 2)
+            row["retrieval_score"] = round(total, 2)
+            scored.append((total, row))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [s for _, s in scored[:max(1, top_k)]]
+
     def _sanitize_program_steps(self, steps, max_steps=None):
         if not isinstance(steps, list):
             return []
         cap = max_steps if isinstance(max_steps, int) and max_steps > 0 else PROGRAM_DETAIL_MAX_STEPS
         out = []
+        cut_keywords = ("cut", "hole", "slot", "port", "vent", "notch", "window", "opening")
         for st in steps:
             if not isinstance(st, dict):
                 continue
@@ -1375,7 +1767,7 @@ class FusionAIAssistant:
                 out.append({"action": "refresh"})
             else:
                 shape = str(st.get("shape", "rect")).strip().lower()
-                if shape not in ("rect", "circle"):
+                if shape not in ("rect", "circle", "polygon", "ring", "gear"):
                     continue
                 step = {
                     "action": "build",
@@ -1389,6 +1781,8 @@ class FusionAIAssistant:
                 }
                 if step["distance"] <= 0.1:
                     continue
+                base_plane, off = self._parse_plane_and_offset(step["plane"])
+                step["plane"] = f"{base_plane}@{round(off, 3)}" if abs(off) > 1e-9 else base_plane
                 repeat = int(max(1, min(32, self._to_float(st.get("repeat"), 1))))
                 step["repeat"] = repeat
                 step["dx"] = round(self._to_float(st.get("dx"), 0.0), 1)
@@ -1399,15 +1793,150 @@ class FusionAIAssistant:
                     step["h"] = round(abs(self._to_float(st.get("h"), 0.0)), 1)
                     if step["w"] <= 0.1 or step["h"] <= 0.1:
                         continue
-                else:
+                elif shape == "circle":
                     step["radius"] = round(abs(self._to_float(st.get("radius"), 0.0)), 1)
                     if step["radius"] <= 0.1:
                         continue
+                elif shape == "polygon":
+                    step["radius"] = round(abs(self._to_float(st.get("radius"), 0.0)), 1)
+                    step["sides"] = int(max(3, min(96, self._to_float(st.get("sides"), 6))))
+                    step["rotation_deg"] = round(self._to_float(st.get("rotation_deg"), 0.0), 1)
+                    if step["radius"] <= 0.1:
+                        continue
+                elif shape == "ring":
+                    step["outer_radius"] = round(abs(self._to_float(st.get("outer_radius"), 0.0)), 1)
+                    step["inner_radius"] = round(abs(self._to_float(st.get("inner_radius"), 0.0)), 1)
+                    if step["outer_radius"] <= 0.2 or step["inner_radius"] <= 0.1:
+                        continue
+                    if step["inner_radius"] >= step["outer_radius"]:
+                        step["inner_radius"] = round(max(0.1, step["outer_radius"] * 0.7), 1)
+                elif shape == "gear":
+                    step["outer_radius"] = round(abs(self._to_float(st.get("outer_radius"), 0.0)), 1)
+                    step["inner_radius"] = round(abs(self._to_float(st.get("inner_radius"), 0.0)), 1)
+                    step["tooth_count"] = int(max(6, min(80, self._to_float(st.get("tooth_count"), 16))))
+                    step["rotation_deg"] = round(self._to_float(st.get("rotation_deg"), 0.0), 1)
+                    if step["outer_radius"] <= 0.3 or step["inner_radius"] <= 0.1:
+                        continue
+                    if step["inner_radius"] >= step["outer_radius"]:
+                        step["inner_radius"] = round(max(0.1, step["outer_radius"] * 0.75), 1)
                 if step["operation"] not in ("NewBodyFeatureOperation", "JoinFeatureOperation", "CutFeatureOperation"):
                     step["operation"] = "NewBodyFeatureOperation"
+                # Stabilize: convert unsafe cut operations to additive ops unless
+                # description clearly indicates a cutout-like feature.
+                desc_lower = step["description"].strip().lower()
+                if step["operation"] == "CutFeatureOperation":
+                    if not any(k in desc_lower for k in cut_keywords):
+                        step["operation"] = "JoinFeatureOperation"
                 out.append(step)
             if len(out) >= cap:
                 break
+        return out
+
+    @staticmethod
+    def _parts_bounds(parts):
+        if not parts:
+            return {
+                "x_min": -100.0, "x_max": 100.0,
+                "y_min": 0.0, "y_max": 100.0,
+                "z_min": 0.0, "z_max": 100.0,
+            }
+        return {
+            "x_min": min(p["x_min"] for p in parts),
+            "x_max": max(p["x_max"] for p in parts),
+            "y_min": min(p["y_min"] for p in parts),
+            "y_max": max(p["y_max"] for p in parts),
+            "z_min": min(p["z_min"] for p in parts),
+            "z_max": max(p["z_max"] for p in parts),
+        }
+
+    def _constrain_program_steps_to_bounds(self, steps, bounds, margin_ratio=0.18):
+        if not steps:
+            return []
+        bx0, bx1 = bounds["x_min"], bounds["x_max"]
+        by0, by1 = bounds["y_min"], bounds["y_max"]
+        bz0, bz1 = bounds["z_min"], bounds["z_max"]
+        bw = max(1.0, bx1 - bx0)
+        bd = max(1.0, by1 - by0)
+        bh = max(1.0, bz1 - bz0)
+        mx = bw * margin_ratio
+        my = bd * margin_ratio
+        mz = bh * margin_ratio
+        min_x, max_x = bx0 - mx, bx1 + mx
+        min_y, max_y = by0 - my, by1 + my
+        min_z, max_z = max(0.0, bz0 - mz), bz1 + mz
+
+        def infer_plane_offset(base, explicit, desc, repeat, dz):
+            if explicit:
+                return None, dz
+            inset_x = max(0.8, 0.04 * bw)
+            inset_y = max(0.8, 0.04 * bd)
+            d = (desc or "").lower()
+            if base == "YZ":
+                left = "left" in d
+                right = "right" in d
+                side_like = any(k in d for k in ("side", "track", "wheel", "armor", "panel", "pipe", "exhaust"))
+                if left:
+                    return bx0 + inset_x, dz
+                if right:
+                    return bx1 - inset_x, dz
+                if side_like and repeat == 2 and abs(dz) < 1e-6:
+                    span = max(1.0, (bx1 - inset_x) - (bx0 + inset_x))
+                    return bx0 + inset_x, span
+                if side_like:
+                    return bx1 - inset_x, dz
+            if base == "XZ":
+                rear = any(k in d for k in ("rear", "back", "engine", "exhaust"))
+                front = any(k in d for k in ("front", "nose", "gun", "barrel"))
+                if rear:
+                    return by0 + inset_y, dz
+                if front:
+                    return by1 - inset_y, dz
+            return None, dz
+
+        out = []
+        for st in steps:
+            if st.get("action") != "build":
+                out.append(st)
+                continue
+            s = dict(st)
+            plane_raw = str(s.get("plane", "XY")).strip().upper()
+            explicit_off = "@" in plane_raw
+            base, off = self._parse_plane_and_offset(plane_raw)
+            repeat = int(max(1, min(32, self._to_float(s.get("repeat"), 1))))
+            dz = self._to_float(s.get("dz"), 0.0)
+            inferred_off, inferred_dz = infer_plane_offset(
+                base=base,
+                explicit=explicit_off,
+                desc=str(s.get("description", "")),
+                repeat=repeat,
+                dz=dz,
+            )
+            if inferred_off is not None:
+                off = inferred_off
+                s["dz"] = round(inferred_dz, 1)
+
+            # Clamp sketch coordinates in the local coordinates of each plane.
+            cx = self._to_float(s.get("cx"), 0.0)
+            cy = self._to_float(s.get("cy"), 0.0)
+            if base == "XY":
+                cx = max(min_x, min(max_x, cx))   # X
+                cy = max(min_y, min(max_y, cy))   # Y
+            elif base == "XZ":
+                cx = max(min_x, min(max_x, cx))   # X
+                cy = max(min_z, min(max_z, cy))   # Z
+            else:  # YZ
+                cx = max(min_y, min(max_y, cx))   # Y
+                cy = max(min_z, min(max_z, cy))   # Z
+            s["cx"] = round(cx, 1)
+            s["cy"] = round(cy, 1)
+            if base == "XY":
+                off = max(min_z, min(max_z, off))
+            elif base == "XZ":
+                off = max(min_y, min(max_y, off))
+            else:  # YZ
+                off = max(min_x, min(max_x, off))
+            s["plane"] = f"{base}@{round(off, 3)}" if abs(off) > 1e-9 else base
+            out.append(s)
         return out
 
     def _plan_detail_program_steps(self, current_parts, user_request, images=None):
@@ -1419,10 +1948,17 @@ class FusionAIAssistant:
             for p in current_parts
         )
         hints = self._dataset_action_hints(user_request, top_k=2)
+        assembly_priors = self._assembly_priors_for_query(
+            user_request, top_k=3, current_parts=current_parts
+        )
+        bounds = self._parts_bounds(current_parts)
         request_text = (
             f"Current model parts (cm):\n{parts_summary}\n\n"
             f"Detail request: {user_request}\n\n"
+            f"Current bounds (cm): {json.dumps(bounds, ensure_ascii=True)}\n\n"
+            f"{ASSEMBLY_MECHANICAL_PRIORS}\n\n"
             f"Dataset action hints:\n{json.dumps(hints, ensure_ascii=True)}\n\n"
+            f"Assembly dataset priors:\n{json.dumps(assembly_priors, ensure_ascii=True)}\n\n"
             "Plan only additional steps to add functional details on top of current model."
         )
         raw = (
@@ -1431,7 +1967,11 @@ class FusionAIAssistant:
             self._call_llm(PROGRAM_DETAIL_PLANNER_PROMPT, request_text)
         )
         payload = self._parse_json(raw)
-        return self._sanitize_program_steps(payload.get("steps", []), max_steps=PROGRAM_DETAIL_MAX_STEPS)
+        local_cap = PROGRAM_DETAIL_MAX_STEPS
+        if not images:
+            local_cap = min(local_cap, 8)
+        steps = self._sanitize_program_steps(payload.get("steps", []), max_steps=local_cap)
+        return self._constrain_program_steps_to_bounds(steps, bounds)
 
     def _evaluate_detail_needs(self, current_parts, user_request, images=None):
         if not current_parts:
@@ -1479,6 +2019,9 @@ class FusionAIAssistant:
         if not current_parts:
             return list(current_parts)
         max_rounds = rounds if isinstance(rounds, int) and rounds > 0 else max(1, AUTO_DETAIL_PROGRAM_ROUNDS)
+        if not images:
+            # Text-only mode is less grounded; keep detailing conservative.
+            max_rounds = min(max_rounds, 1)
         parts = list(current_parts)
         for r in range(max_rounds):
             assessment = self._evaluate_detail_needs(parts, user_request, images=images)
@@ -1496,12 +2039,15 @@ class FusionAIAssistant:
                 print("  [AutoDetail] Planner returned no detail steps.")
                 break
             print(f"  [AutoDetail] Executing {len(steps)} detail steps...")
-            self.execute_plan(steps)
+            ok, total = self.execute_plan(steps)
+            if total > 0 and ok / total < 0.7:
+                print("  [AutoDetail] Too many failed detail steps; stopping auto detail for stability.")
+                break
             added = self._steps_to_bboxes(steps)
             if not added:
                 break
             merged = parts + added
-            merged = self._sanitize_parts(merged)
+            merged = self._sanitize_parts(merged, normalize_frame=False)
             parts = self._limit_parts_for_stability(merged, max_parts=DETAILING_MAX_PARTS)
         return parts
 
@@ -1642,6 +2188,9 @@ class FusionAIAssistant:
         score = 0.0
         # Penalize too many parts for demo stability.
         score -= max(0, len(parts) - 12) * 8.0
+        # Penalize too-few parts for likely complex requests.
+        if len(parts) < 3:
+            score -= 120.0
         # Penalize negative Z and very thin/degenerate boxes.
         for p in parts:
             if p["z_min"] < -0.1:
@@ -1651,6 +2200,10 @@ class FusionAIAssistant:
             dz = p["z_max"] - p["z_min"]
             if min(dx, dy, dz) < 0.2:
                 score -= 40.0
+            # Very extreme aspect boxes are usually decomposition artifacts.
+            dims = sorted([max(0.01, dx), max(0.01, dy), max(0.01, dz)])
+            if dims[-1] / dims[0] > 18.0:
+                score -= 20.0
         # Connectivity score.
         n = len(parts)
         visited = set([0])
@@ -1665,10 +2218,66 @@ class FusionAIAssistant:
                     stack.append(j)
         disconnected = n - len(visited)
         score -= disconnected * 120.0
+        # Penalize highly-overlapping duplicates.
+        dup_penalty = 0.0
+        for i in range(n):
+            a = parts[i]
+            av = max(0.01, self._part_volume(a))
+            for j in range(i + 1, n):
+                b = parts[j]
+                ix = max(0.0, min(a["x_max"], b["x_max"]) - max(a["x_min"], b["x_min"]))
+                iy = max(0.0, min(a["y_max"], b["y_max"]) - max(a["y_min"], b["y_min"]))
+                iz = max(0.0, min(a["z_max"], b["z_max"]) - max(a["z_min"], b["z_min"]))
+                iv = ix * iy * iz
+                if iv <= 0.0:
+                    continue
+                bv = max(0.01, self._part_volume(b))
+                overlap_small = iv / min(av, bv)
+                if overlap_small > 0.88:
+                    dup_penalty += 12.0
+        score -= min(120.0, dup_penalty)
         # Reward floor contact for supporting parts.
         floor_touch = sum(1 for p in parts if abs(p["z_min"]) <= 0.8)
         score += min(4, floor_touch) * 8.0
         return score
+
+    def _repair_parts_with_audit(self, user_request, parts):
+        if not parts:
+            return []
+        base = self._sanitize_parts(parts)
+        if not base:
+            return []
+        base_score = self._score_parts(base)
+        # Skip costly repair when candidate is already strong.
+        if base_score >= -8.0 and len(base) >= 6:
+            return base
+
+        format_hint = (
+            '{"parts": [\n'
+            '  {"name": "Part A", "x_min": -20, "x_max": 20, '
+            '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
+            '  ...\n'
+            ']}'
+        )
+        request_text = (
+            f'User request: "{user_request}"\n\n'
+            "Current candidate parts:\n"
+            f"{json.dumps({'parts': base}, ensure_ascii=True)}\n\n"
+            "Improve structural plausibility, connectivity, and orientation.\n"
+            "You may split grouped parts, add missing structural supports, or remove redundant overlaps.\n"
+            "Return full corrected parts JSON."
+        )
+        try:
+            prompt = GEOMETRY_AUDIT_PROMPT.replace("{format_hint}", format_hint)
+            raw = self._call_llm(prompt, request_text)
+            payload = self._parse_json(raw)
+            repaired = self._sanitize_parts(payload.get("parts", []))
+            if not repaired:
+                return base
+            repaired_score = self._score_parts(repaired)
+            return repaired if repaired_score >= base_score else base
+        except Exception:
+            return base
 
     @staticmethod
     def _part_volume(p):
@@ -1864,11 +2473,15 @@ class FusionAIAssistant:
         ))
         return out
 
-    def _sanitize_parts(self, parts, target_dims=None, symmetry="none"):
+    def _sanitize_parts(self, parts, target_dims=None, symmetry="none", normalize_frame=True):
         """Normalize generated boxes for stable, universal reconstruction."""
         clean = []
         for i, p in enumerate(parts):
             name = str(p.get("name", f"Part {i+1}")).strip() or f"Part {i+1}"
+            raw_plane = str(p.get("plane", "")).strip()
+            plane = ""
+            if raw_plane:
+                plane, _ = self._parse_plane_and_offset(raw_plane)
             x0 = self._to_float(p.get("x_min"))
             x1 = self._to_float(p.get("x_max"))
             y0 = self._to_float(p.get("y_min"))
@@ -1883,30 +2496,35 @@ class FusionAIAssistant:
                 z0, z1 = z1, z0
             if (x1 - x0) < 0.2 or (y1 - y0) < 0.2 or (z1 - z0) < 0.2:
                 continue
-            clean.append({
+            item = {
                 "name": name,
                 "x_min": x0, "x_max": x1,
                 "y_min": y0, "y_max": y1,
                 "z_min": z0, "z_max": z1,
-            })
+            }
+            if plane:
+                item["plane"] = plane
+            clean.append(item)
         if not clean:
             return []
 
-        # Global translation normalization: center in X, anchor floor to Z=0, back to Y=0.
-        x_min = min(p["x_min"] for p in clean)
-        x_max = max(p["x_max"] for p in clean)
-        y_min_global = min(p["y_min"] for p in clean)
-        z_min_global = min(p["z_min"] for p in clean)
-        x_center = (x_min + x_max) / 2.0
-        for p in clean:
-            p["x_min"] -= x_center
-            p["x_max"] -= x_center
-            p["y_min"] -= y_min_global
-            p["y_max"] -= y_min_global
-            p["z_min"] -= z_min_global
-            p["z_max"] -= z_min_global
-            if p["z_min"] < 0:
-                p["z_min"] = 0.0
+        # Frame normalization is useful for first-pass generation, but must be
+        # disabled for incremental detailing to avoid drifting global coordinates.
+        if normalize_frame:
+            x_min = min(p["x_min"] for p in clean)
+            x_max = max(p["x_max"] for p in clean)
+            y_min_global = min(p["y_min"] for p in clean)
+            z_min_global = min(p["z_min"] for p in clean)
+            x_center = (x_min + x_max) / 2.0
+            for p in clean:
+                p["x_min"] -= x_center
+                p["x_max"] -= x_center
+                p["y_min"] -= y_min_global
+                p["y_max"] -= y_min_global
+                p["z_min"] -= z_min_global
+                p["z_max"] -= z_min_global
+                if p["z_min"] < 0:
+                    p["z_min"] = 0.0
 
         # Scale to photo-estimated outer dimensions when available.
         if isinstance(target_dims, dict):
@@ -1979,13 +2597,63 @@ class FusionAIAssistant:
         r = self.fusion.add_circle(sketch_name, {"x": cx, "y": cy}, radius)
         return self._extract_profile(r)
 
+    def _draw_polygon(self, sketch_name, cx, cy, radius, sides, rotation_deg=0.0):
+        n = int(max(3, min(96, sides)))
+        rad = max(0.1, float(radius))
+        rot = math.radians(float(rotation_deg))
+        pts = []
+        for i in range(n):
+            a = rot + (2.0 * math.pi * i / n)
+            pts.append({"x": cx + rad * math.cos(a), "y": cy + rad * math.sin(a)})
+        for pt in pts:
+            self.fusion.add_point(sketch_name, pt)
+        r = self.fusion.close_profile(sketch_name)
+        return self._extract_profile(r)
+
+    def _draw_gear(self, sketch_name, cx, cy, outer_radius, inner_radius, tooth_count, rotation_deg=0.0):
+        t = int(max(6, min(80, tooth_count)))
+        ro = max(0.2, float(outer_radius))
+        ri = max(0.1, min(ro * 0.95, float(inner_radius)))
+        rot = math.radians(float(rotation_deg))
+        pts = []
+        for i in range(t * 2):
+            a = rot + (2.0 * math.pi * i / (t * 2))
+            rr = ro if (i % 2 == 0) else ri
+            pts.append({"x": cx + rr * math.cos(a), "y": cy + rr * math.sin(a)})
+        for pt in pts:
+            self.fusion.add_point(sketch_name, pt)
+        r = self.fusion.close_profile(sketch_name)
+        return self._extract_profile(r)
+
+    def _draw_ring(self, sketch_name, cx, cy, outer_radius, inner_radius):
+        ro = max(0.2, float(outer_radius))
+        ri = max(0.1, min(ro * 0.95, float(inner_radius)))
+        self.fusion.add_circle(sketch_name, {"x": cx, "y": cy}, ro)
+        r = self.fusion.add_circle(sketch_name, {"x": cx, "y": cy}, ri)
+        target_area = math.pi * (ro * ro - ri * ri)
+        return self._extract_profile(r, target_area=target_area)
+
     @staticmethod
-    def _extract_profile(response):
+    def _extract_profile(response, target_area=None):
         if response.status_code != 200:
             return None
         profiles = response.json().get("data", {}).get("profiles", {})
         if not profiles:
             return None
+        if target_area is not None:
+            best_id = None
+            best_err = float("inf")
+            for pid, pobj in profiles.items():
+                try:
+                    area = float((pobj or {}).get("properties", {}).get("area", 0.0))
+                except Exception:
+                    area = 0.0
+                err = abs(area - target_area)
+                if err < best_err:
+                    best_err = err
+                    best_id = pid
+            if best_id is not None:
+                return best_id
         return next(iter(profiles))
 
     # -- step execution -------------------------------------------------------
@@ -2014,20 +2682,26 @@ class FusionAIAssistant:
             dy_rep = self._to_float(step.get("dy"), 0.0)
             dz_rep = self._to_float(step.get("dz"), 0.0)
 
-            print(f"    [build] {desc}  |  {plane}  cx={step.get('cx')}"
-                  f"  cy={step.get('cy')}  w={step.get('w')}"
-                  f"  h={step.get('h')}  d={distance}"
-                  f"  repeat={repeat}")
+            if shape == "circle":
+                dims = f"r={step.get('radius')}  d={distance}"
+            elif shape == "polygon":
+                dims = f"r={step.get('radius')}  n={step.get('sides')}  d={distance}"
+            elif shape in ("ring", "gear"):
+                dims = f"ro={step.get('outer_radius')}  ri={step.get('inner_radius')}  d={distance}"
+            else:
+                dims = f"w={step.get('w')}  h={step.get('h')}  d={distance}"
+            print(f"    [build] {desc}  |  {plane}  cx={step.get('cx')}  cy={step.get('cy')}  {dims}  repeat={repeat}")
 
             base_cx = self._to_float(step.get("cx"), 0.0)
             base_cy = self._to_float(step.get("cy"), 0.0)
-            base_plane = str(plane)
+            base_plane_name, base_plane_off = self._parse_plane_and_offset(plane)
+            base_plane = f"{base_plane_name}@{round(base_plane_off, 3)}" if abs(base_plane_off) > 1e-9 else base_plane_name
 
             for idx in range(repeat):
                 cur_plane = base_plane
                 if abs(dz_rep) > 1e-6:
-                    z0 = self._parse_xy_plane_offset(base_plane) + dz_rep * idx
-                    cur_plane = f"XY@{round(z0, 3)}"
+                    off = base_plane_off + dz_rep * idx
+                    cur_plane = f"{base_plane_name}@{round(off, 3)}"
 
                 r = self.fusion.add_sketch(cur_plane)
                 if r.status_code != 200:
@@ -2050,6 +2724,30 @@ class FusionAIAssistant:
                         cx, cy,
                         step.get("radius", 5),
                     )
+                elif shape == "polygon":
+                    profile_id = self._draw_polygon(
+                        sketch_name,
+                        cx, cy,
+                        step.get("radius", 5),
+                        step.get("sides", 6),
+                        step.get("rotation_deg", 0),
+                    )
+                elif shape == "ring":
+                    profile_id = self._draw_ring(
+                        sketch_name,
+                        cx, cy,
+                        step.get("outer_radius", 6),
+                        step.get("inner_radius", 4),
+                    )
+                elif shape == "gear":
+                    profile_id = self._draw_gear(
+                        sketch_name,
+                        cx, cy,
+                        step.get("outer_radius", 6),
+                        step.get("inner_radius", 4),
+                        step.get("tooth_count", 16),
+                        step.get("rotation_deg", 0),
+                    )
                 else:
                     print(f"            Unknown shape: {shape}")
                     return False
@@ -2060,7 +2758,18 @@ class FusionAIAssistant:
 
                 r = self.fusion.add_extrude(sketch_name, profile_id, distance, operation)
                 if r.status_code != 200:
-                    print(f"            Error: extrude -> {r.json().get('message', '')}")
+                    msg = ""
+                    try:
+                        msg = r.json().get("message", "")
+                    except Exception:
+                        msg = ""
+                    # Robust fallback: if Cut/Intersect has no valid target body,
+                    # retry as Join to avoid dropping the full detail step.
+                    if operation in ("CutFeatureOperation", "IntersectFeatureOperation") and "No target body found" in str(msg):
+                        r2 = self.fusion.add_extrude(sketch_name, profile_id, distance, "JoinFeatureOperation")
+                        if r2.status_code == 200:
+                            continue
+                    print(f"            Error: extrude -> {msg}")
                     return False
 
             time.sleep(STEP_DELAY)
@@ -2082,6 +2791,7 @@ class FusionAIAssistant:
                     self.fusion.refresh()
         self.fusion.refresh()
         print(f"\n  Done: {ok}/{total} steps completed successfully.")
+        return ok, total
 
     def _interactive_user_refine(self, base_request, current_parts, images=None):
         """Ask user to accept or provide manual corrections, then rebuild."""
@@ -2115,7 +2825,7 @@ class FusionAIAssistant:
                 format_hint = (
                     '{"parts": [\n'
                     '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-                    '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+                    '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
                     '  ...\n'
                     ']}'
                 )
@@ -2127,7 +2837,7 @@ class FusionAIAssistant:
                 else:
                     raw = self._call_llm(prompt, correction_request)
                 result = self._parse_json(raw)
-                new_parts = self._sanitize_parts(result.get("parts", []))
+                new_parts = self._sanitize_parts(result.get("parts", []), normalize_frame=False)
                 new_parts = self._limit_parts_for_stability(new_parts, max_parts=max(12, len(parts)))
             except Exception as e:
                 print(f"  Correction failed: {e}")
@@ -2190,7 +2900,7 @@ class FusionAIAssistant:
                 print("  Model approved the result!")
                 return original_parts
 
-            # Re-run architect with the critique — VLM never touches coordinates
+            # Re-run architect with the critique вЂ” VLM never touches coordinates
             print("  Re-running architect with feedback...\n")
             correction_request = (
                 f'Original request: "{user_request}"\n'
@@ -2205,7 +2915,7 @@ class FusionAIAssistant:
                 format_hint = (
                     '{"parts": [\n'
                     '  {"name": "Part A", "x_min": -20, "x_max": 20, '
-                    '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3},\n'
+                    '"y_min": 0, "y_max": 40, "z_min": 0, "z_max": 3, "plane": "YZ"},\n'
                     '  ...\n'
                     ']}'
                 )
@@ -2244,7 +2954,7 @@ class FusionAIAssistant:
         print(sep)
         print("  Fusion 360 AI Assistant  (two-step pipeline)")
         print(f"  Provider: {self.provider}  |  Model: {self.model}")
-        print("  Pipeline: Architect LLM → Deterministic Encoder → Fusion 360")
+        print("  Pipeline: Architect LLM в†’ Deterministic Encoder в†’ Fusion 360")
         print("  Describe what you want to build in plain text. To extend current model: e.g. 'add armrests', 'make the back higher'.")
         print(f"  Visual review: {'ON' if self.review_enabled else 'OFF'}")
         print("  Commands: exit | clear | detach | relaunch | review on/off/status | save <name[.ext]> | ping | help")
@@ -2434,7 +3144,7 @@ class FusionAIAssistant:
                 added_parts = self._steps_to_bboxes(steps)
                 if added_parts:
                     merged = list(self.last_parts) + added_parts
-                    merged = self._sanitize_parts(merged)
+                    merged = self._sanitize_parts(merged, normalize_frame=False)
                     self.last_parts = self._limit_parts_for_stability(merged, max_parts=DETAILING_MAX_PARTS)
                 self.last_request = f"detail program {req}"
                 print("  Done.\n")
@@ -2503,8 +3213,7 @@ class FusionAIAssistant:
                 if build_steps:
                     print("  Build plan:")
                     for s in build_steps:
-                        print(f"    - {s['description']:30s}  {s['plane']}  cx={s['cx']:6.1f}  cy={s['cy']:6.1f}  "
-                              f"w={s['w']:6.1f}  h={s['h']:6.1f}  d={s['distance']:7.1f}")
+                        print("    - " + self._format_build_step_line(s))
                     print()
                 print("  [Execute] Building in Fusion 360...\n")
                 self.execute_plan(steps)
@@ -2582,8 +3291,7 @@ class FusionAIAssistant:
                 if build_steps:
                     print("  Build plan:")
                     for s in build_steps:
-                        print(f"    - {s['description']:30s}  {s['plane']}  cx={s['cx']:6.1f}  cy={s['cy']:6.1f}  "
-                              f"w={s['w']:6.1f}  h={s['h']:6.1f}  d={s['distance']:7.1f}")
+                        print("    - " + self._format_build_step_line(s))
                     print()
                 print("  [Execute] Building in Fusion 360...\n")
                 self.execute_plan(steps)
@@ -2618,10 +3326,10 @@ class FusionAIAssistant:
                 if not model_id:
                     print("  Usage: build model <id>\n")
                     continue
-                design = self.index.find_exact_model(model_id)
+                design = self._find_exact_model_any(model_id)
                 if design is None:
                     print(f"  Model '{model_id}' not found in current index.")
-                    print("  Tip: set DESIGN_INDEX_FILE in .env and restart.\n")
+                    print("  Tip: set DESIGN_INDEX_FILE / TRACK_DESIGN_INDEX_FILE in .env and restart.\n")
                     continue
 
                 parts = design.get("parts", [])
@@ -2672,9 +3380,7 @@ class FusionAIAssistant:
                 build_steps = [s for s in steps if s.get("action") == "build"]
                 print("  Build plan:")
                 for s in build_steps:
-                    print(f"    - {s['description']:30s}  "
-                          f"{s['plane']}  cx={s['cx']:6.1f}  cy={s['cy']:6.1f}  "
-                          f"w={s['w']:6.1f}  h={s['h']:6.1f}  d={s['distance']:7.1f}")
+                    print("    - " + self._format_build_step_line(s))
                 print()
 
                 print("  [Execute] Building in Fusion 360...\n")
@@ -2690,7 +3396,7 @@ class FusionAIAssistant:
 
             intent = self._intent_extend_or_new(command_input, bool(self.last_parts))
             if intent == "extend" and self.last_parts:
-                # User wants to add to or modify the current model — revise, don't decompose from scratch
+                # User wants to add to or modify the current model вЂ” revise, don't decompose from scratch
                 print("\n  [Extend] Modifying current model per your request...\n")
                 try:
                     parts = self._revise_model_parts(self.last_parts, command_input)
@@ -2728,7 +3434,7 @@ class FusionAIAssistant:
                       f"  Z[{p['z_min']:7.1f},{p['z_max']:7.1f}]")
             print()
 
-            # --- Step B: Deterministic encoder → Gym commands ---
+            # --- Step B: Deterministic encoder в†’ Gym commands ---
             print("  [Step B] Encoder: converting bounding boxes to build commands...\n")
             steps = self.encode(parts)
 
@@ -2736,9 +3442,7 @@ class FusionAIAssistant:
             if build_steps:
                 print("  Build plan:")
                 for s in build_steps:
-                    print(f"    - {s['description']:30s}  "
-                          f"{s['plane']}  cx={s['cx']:6.1f}  cy={s['cy']:6.1f}  "
-                          f"w={s['w']:6.1f}  h={s['h']:6.1f}  d={s['distance']:7.1f}")
+                    print("    - " + self._format_build_step_line(s))
                 print()
 
             # --- Execute in Fusion 360 ---
@@ -2772,3 +3476,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

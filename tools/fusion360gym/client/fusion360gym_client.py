@@ -243,8 +243,8 @@ class Fusion360GymClient():
     # INCREMENTAL CONSTRUCTION
     # -------------------------------------------------------------------------
 
-    def add_sketch(self, sketch_plane):
-        """Add a sketch to the design"""
+    def add_sketch(self, sketch_plane, sketch_name=None):
+        """Add a sketch to the design. Optional sketch_name for durable identification."""
         is_str = isinstance(sketch_plane, str)
         is_int = isinstance(sketch_plane, int)
         is_dict = isinstance(sketch_plane, dict)
@@ -263,6 +263,8 @@ class Fusion360GymClient():
         command_data = {
             "sketch_plane": sketch_plane
         }
+        if sketch_name is not None and isinstance(sketch_name, str) and sketch_name.strip():
+            command_data["sketch_name"] = sketch_name.strip()
         return self.send_command("add_sketch", data=command_data)
 
     def add_point(self, sketch_name, pt, transform=None):
@@ -377,8 +379,8 @@ class Fusion360GymClient():
         }
         return self.send_command("close_profile", data=command_data)
 
-    def add_extrude(self, sketch_name, profile_id, distance, operation):
-        """Add an extrude using the given sketch profile"""
+    def add_extrude(self, sketch_name, profile_id, distance, operation, feature_name=None):
+        """Add an extrude using the given sketch profile. Optional feature_name for durable identification."""
         if (sketch_name is None or profile_id is None or
                 distance is None or operation is None):
             return self.__return_error(f"Missing arguments")
@@ -396,7 +398,26 @@ class Fusion360GymClient():
             "distance": distance,
             "operation": operation
         }
+        if feature_name is not None and isinstance(feature_name, str) and feature_name.strip():
+            command_data["feature_name"] = feature_name.strip()
         return self.send_command("add_extrude", data=command_data)
+
+    def find_entity_by_name(self, entity_type, name):
+        """Find an entity (Sketch, ExtrudeFeature) by name for stateful editing.
+        Returns response with data.found and data.count; if count>1 server returns failure."""
+        if not isinstance(entity_type, str) or not isinstance(name, str):
+            return self.__return_error("entity_type and name must be strings")
+        command_data = {"type": entity_type, "name": name}
+        return self.send_command("find_entity_by_name", data=command_data)
+
+    def update_extrude(self, feature_name, distance):
+        """Update an extrude feature's distance by feature name (stateful edit)."""
+        if not isinstance(feature_name, str) or len(feature_name) == 0:
+            return self.__return_error("feature_name is required")
+        if not isinstance(distance, (int, float)):
+            return self.__return_error("distance must be a number")
+        command_data = {"feature_name": feature_name, "distance": float(distance)}
+        return self.send_command("update_extrude", data=command_data)
 
     # -------------------------------------------------------------------------
     # TARGET RECONSTRUCTION
