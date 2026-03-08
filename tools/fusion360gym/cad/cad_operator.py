@@ -87,6 +87,7 @@ def run_cad_operator(
     dry_run: bool = False,
     step_delay: float = 0.4,
     edit_mode: bool = False,
+    previous_plan: Optional[Dict[str, Any]] = None,
     run_post_render_fix: bool = False,
     user_request: str = "",
     take_screenshot: Optional[Callable[[], Optional[str]]] = None,
@@ -97,7 +98,8 @@ def run_cad_operator(
 ) -> ExecutionResult:
     """
     Validate plan, compile, execute. Optionally run post-render Inspector+Fixer loop.
-    Never calls clear().
+    Never calls clear(). In edit mode, previous_plan can be provided for
+    deterministic in-place vs recreate-required classification.
     """
     cap_model = capabilities or default_capability_model()
     vr = validate_plan(plan, capabilities=cap_model, allow_unsupported=dry_run)
@@ -128,7 +130,7 @@ def run_cad_operator(
         session_id=session,
         capabilities=cap_model,
     )
-    result = executor.execute_plan(plan)
+    result = executor.execute_plan(plan, previous_plan=previous_plan)
     if not result.success or not run_post_render_fix or dry_run:
         return result
     if not take_screenshot or not call_llm_with_image or not call_llm:
@@ -163,7 +165,7 @@ def run_cad_operator(
                 )
             )
             break
-        result = executor.execute_plan(plan)
+        result = executor.execute_plan(plan, previous_plan=previous_plan)
     return result
 
 

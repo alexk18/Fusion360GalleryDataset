@@ -1,11 +1,13 @@
 ﻿"""
-Fusion 360 AI Assistant вЂ” two-step pipeline with deterministic encoder.
+Fusion 360 AI Assistant.
 
-Architecture:
-  1. Architect LLM: text в†’ 3D bounding boxes (chain-of-thought decomposition)
-  2. Deterministic encoder: bounding boxes в†’ Fusion 360 Gym JSON commands
-  3. Fusion 360 Gym: execute commands в†’ live 3D model
-  4. Visual feedback: screenshot в†’ VLM review в†’ fix loop
+Primary architecture:
+  1. LLM planner (text/vision) -> CAD Plan DSL
+  2. Deterministic validator/compiler/executor -> Fusion 360 Gym
+  3. Optional screenshot review loop
+
+Legacy fallback (explicit opt-in only):
+  - bbox decomposition -> deterministic encoder
 
 Usage:
   1. Launch Fusion 360 and run the Fusion 360 Gym add-in
@@ -30,8 +32,21 @@ load_dotenv(override=True)
 CLIENT_DIR = os.path.join(os.path.dirname(__file__), "..", "client")
 if CLIENT_DIR not in sys.path:
     sys.path.append(CLIENT_DIR)
+FUSION_DIR = os.path.join(os.path.dirname(__file__), "..")
+if FUSION_DIR not in sys.path:
+    sys.path.insert(0, FUSION_DIR)
 
 from fusion360gym_client import Fusion360GymClient
+from cad.cad_operator import run_best_of_n_create, pre_render_fix, run_cad_operator
+from cad.cad_capabilities import default_capability_model, capability_required_for_primitive
+from cad.cad_validate import validate_plan
+from cad.cad_multimodal import structural_from_legacy_bboxes, LegacyBboxCadPlanner
+from cad.cad_agent_loop import IterativeCreateAgent
+from cad.cad_dsl import PRIMITIVES as CAD_DSL_PRIMITIVES
+from cad.cad_structural_spec import validate_structural_spec
+from cad.cad_structural_planner import plan_structural_specs
+from cad.cad_structural_ranker import rank_structural_specs, rank_dsl_candidates
+from cad.cad_dsl_synthesizer import synthesize_dsl_candidates_from_structural_spec
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -84,10 +99,70 @@ MULTIVIEW_BEST_OF_N_CANDIDATES = int(
     os.environ.get("MULTIVIEW_BEST_OF_N_CANDIDATES", "6")
 )
 MULTIVIEW_MIN_CONFIRM_VIEWS = int(os.environ.get("MULTIVIEW_MIN_CONFIRM_VIEWS", "2"))
+USE_CAD_DSL_PLANNER = os.environ.get("USE_CAD_DSL_PLANNER", "1").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+DSL_CANDIDATE_COUNT = int(os.environ.get("DSL_CANDIDATE_COUNT", str(max(3, BEST_OF_N_CANDIDATES))))
+USE_LEGACY_BBOX_FALLBACK = os.environ.get("USE_LEGACY_BBOX_FALLBACK", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 # ---------------------------------------------------------------------------
 # Architect prompt вЂ” LLM decomposes objects into 3D bounding boxes
 # ---------------------------------------------------------------------------
+
+CAD_DSL_PLANNER_PROMPT = r"""You are a strict CAD planner.
+Output ONLY a JSON CAD Plan for deterministic execution.
+
+Allowed primitives:
+- rect_extrude
+- circle_extrude
+- poly_extrude
+- wedge_extrude
+- cut_extrude
+
+Allowed operations:
+- NewBodyFeatureOperation
+- JoinFeatureOperation
+- CutFeatureOperation
+
+Rules:
+1) Keep the model physically plausible and connected.
+2) Prefer 6-18 steps and structural simplicity over decorative detail.
+3) Use planes intentionally: XY@z, XZ@y, YZ@x.
+4) Put objects on the floor (z >= 0).
+5) For repeated wheels/holes, create explicit separate steps.
+6) Use stable ids and avoid duplicate step ids.
+7) Do not output text, markdown, or comments.
+
+Return ONLY JSON in this shape:
+{
+  "units": "cm",
+  "session": "session_name",
+  "mode": "create",
+  "budget": {"max_steps": 25, "max_parts": 18},
+  "global": {"symmetry": "approx_x"},
+  "steps": [
+    {
+      "id": "base",
+      "op": "ensure",
+      "primitive": "rect_extrude",
+      "plane": "XY@0",
+      "profile": {"type": "rect", "cx": 0, "cy": 0, "w": 40, "h": 20},
+      "distance": 8,
+      "operation": "NewBodyFeatureOperation"
+    }
+  ]
+}
+"""
+
+CAD_DSL_VISUAL_PLANNER_PROMPT = r"""You are a strict CAD planner for image-guided reconstruction.
+Output ONLY a JSON CAD Plan for deterministic execution.
+
+Use the provided images as geometric evidence and keep shape conservative.
+Return only JSON in the same schema as the text CAD planner.
+Do not output markdown or explanations.
+"""
 
 ARCHITECT_PROMPT = r"""You are a CAD decomposition engine.
 Output axis-aligned 3D bounding boxes in centimeters.
@@ -507,6 +582,7 @@ def encode_bboxes_to_plan(parts, include_clear=True, include_refresh=False):
     from bbox dimensions (smallest axis is used as extrusion direction).
     When include_clear is True, the first step is refresh (fit camera) so the view is usable during build.
     """
+    parts = _expand_grouped_wheel_parts(parts)
     steps = []
     if include_clear:
         steps.append({"action": "refresh"})
@@ -520,6 +596,131 @@ def encode_bboxes_to_plan(parts, include_clear=True, include_refresh=False):
     if include_refresh:
         steps.append({"action": "refresh"})
     return steps
+
+
+def _expand_grouped_wheel_parts(parts):
+    """Expand grouped wheel-like bboxes into repeated wheel elements.
+
+    This is a deterministic stability patch for prompts like "build a tank":
+    LLMs often output one long grouped bbox (e.g. road_wheels_left), which
+    becomes a "bar/leg" after extrusion. We split such grouped parts into
+    repeated near-circular wheel bboxes before step encoding.
+    """
+    if not isinstance(parts, list):
+        return []
+    out = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        name = str(part.get("name", "")).strip().lower()
+        group_like = any(
+            k in name for k in (
+                "road_wheels", "road wheel", "roadwheel",
+                "rollers", "roller_group", "wheel_group",
+                "колес", "катк", "ролик",
+            )
+        )
+        if group_like:
+            expanded = _split_bbox_into_repeated_wheels(part)
+            if expanded and len(expanded) > 1:
+                out.extend(expanded)
+                continue
+        out.append(part)
+    return out
+
+
+def _split_bbox_into_repeated_wheels(part):
+    """Split one elongated wheel-group bbox into N wheel bboxes."""
+    try:
+        x0, x1 = float(part["x_min"]), float(part["x_max"])
+        y0, y1 = float(part["y_min"]), float(part["y_max"])
+        z0, z1 = float(part["z_min"]), float(part["z_max"])
+    except Exception:
+        return [part]
+
+    if x0 > x1:
+        x0, x1 = x1, x0
+    if y0 > y1:
+        y0, y1 = y1, y0
+    if z0 > z1:
+        z0, z1 = z1, z0
+
+    dims = {
+        "x": x1 - x0,
+        "y": y1 - y0,
+        "z": z1 - z0,
+    }
+    long_axis = max(dims, key=lambda a: dims[a])
+    long_len = dims[long_axis]
+    other_axes = [a for a in ("x", "y", "z") if a != long_axis]
+    d1 = dims[other_axes[0]]
+    d2 = dims[other_axes[1]]
+
+    if min(d1, d2) <= 0.2 or long_len <= 0.2:
+        return [part]
+    # Keep only near-cylindrical cross-sections.
+    if max(d1, d2) / max(0.01, min(d1, d2)) > 1.6:
+        return [part]
+    # Grouped wheels should be elongated.
+    if long_len < 2.2 * max(d1, d2):
+        return [part]
+
+    avg_d = 0.5 * (d1 + d2)
+    raw_count = int(round(long_len / max(1.0, avg_d * 1.45)))
+    count = max(3, min(8, raw_count))
+
+    # target wheel length along long axis (slightly thinner than diameter)
+    wheel_len = min(avg_d, (long_len * 0.82) / count)
+    if wheel_len <= 0.2:
+        return [part]
+    gap = (long_len - count * wheel_len) / (count + 1)
+    if gap < 0.15:
+        # if spacing is too tight, reduce wheel count until stable.
+        while count > 2:
+            count -= 1
+            wheel_len = min(avg_d, (long_len * 0.82) / count)
+            gap = (long_len - count * wheel_len) / (count + 1)
+            if gap >= 0.15:
+                break
+    if count < 2:
+        return [part]
+
+    base_name = str(part.get("name", "wheel_group")).strip() or "wheel_group"
+    plane = str(part.get("plane", "")).strip()
+    result = []
+
+    def part_with_axis(lo, hi):
+        p = {
+            "name": "",
+            "x_min": x0, "x_max": x1,
+            "y_min": y0, "y_max": y1,
+            "z_min": z0, "z_max": z1,
+        }
+        if long_axis == "x":
+            p["x_min"], p["x_max"] = lo, hi
+        elif long_axis == "y":
+            p["y_min"], p["y_max"] = lo, hi
+        else:
+            p["z_min"], p["z_max"] = lo, hi
+        if plane:
+            p["plane"] = plane
+        return p
+
+    if long_axis == "x":
+        start = x0 + gap
+    elif long_axis == "y":
+        start = y0 + gap
+    else:
+        start = z0 + gap
+
+    for i in range(count):
+        lo = start + i * (wheel_len + gap)
+        hi = lo + wheel_len
+        p = part_with_axis(lo, hi)
+        p["name"] = f"{base_name}_{i+1}"
+        result.append(p)
+
+    return result if result else [part]
 
 
 def _encode_single_bbox(part):
@@ -674,6 +875,11 @@ class FusionAIAssistant:
         self.last_parts = []
         self.last_request = ""
         self.last_images = []
+        self.last_cad_plan = None
+        self.last_create_policy = None
+        self.last_structural_spec = None
+        self.last_iterative_loop_trace = []
+        self.last_iterative_state_snapshots = []
         self.recon_root = Path(RECON_DATASET_ROOT)
         self.assembly_root = Path(ASSEMBLY_DATASET_ROOT)
         self._recon_file_cache = {}
@@ -1373,6 +1579,712 @@ class FusionAIAssistant:
             if c in text:
                 return "extend"
         return "extend"
+
+    @staticmethod
+    def _should_auto_detail(user_input):
+        """Enable auto-detail only for explicit detail intent."""
+        hay = str(user_input or "").lower()
+        cues = (
+            "detail", "details", "detailing", "refine", "refinement",
+            "add details", "more detail", "mechanical detail",
+            "детал", "проработ", "уточни детали", "добавь детали",
+        )
+        return any(c in hay for c in cues)
+
+    @staticmethod
+    def _classify_create_shape_family(user_request, images=None):
+        specs = plan_structural_specs(
+            str(user_request or ""),
+            images=images or [],
+            capabilities=default_capability_model(),
+        )
+        if not specs:
+            return "furniture_boxy_panel"
+        return str((specs[0] or {}).get("object_family") or "furniture_boxy_panel")
+
+    def _select_structural_specs_for_create(self, user_request, images=None):
+        cap_model = default_capability_model()
+        raw_specs = plan_structural_specs(
+            str(user_request or ""),
+            images=images or [],
+            capabilities=cap_model,
+        )
+        valid_specs = []
+        for spec in raw_specs:
+            if not isinstance(spec, dict):
+                continue
+            errors = validate_structural_spec(spec)
+            if errors:
+                continue
+            valid_specs.append(spec)
+        if not valid_specs:
+            return []
+        ranked = rank_structural_specs(valid_specs, str(user_request or ""), capabilities=cap_model)
+        return [item.get("spec") for item in ranked if isinstance(item, dict) and isinstance(item.get("spec"), dict)]
+
+    def _build_create_policy(self, user_request, images=None, structural_spec=None):
+        spec = structural_spec if isinstance(structural_spec, dict) else {}
+        if not spec:
+            ranked_specs = self._select_structural_specs_for_create(user_request, images=images)
+            if ranked_specs:
+                spec = ranked_specs[0]
+        if not spec:
+            family = "furniture_boxy_panel"
+            outcome = "blocked"
+            allowed_primitives = []
+            approx = "blocked"
+            reason = "structural planner failed to produce a valid spec"
+        else:
+            family = str(spec.get("object_family") or "furniture_boxy_panel")
+            outcome = str(spec.get("build_outcome_target") or "exact")
+            allowed_primitives = [str(p).strip().lower() for p in (spec.get("allowed_primitives") or []) if str(p).strip()]
+            approx = str((spec.get("approximation_policy") or {}).get("mode") or "none")
+            reason = str(spec.get("blocked_reason") or "").strip()
+
+        return {
+            "family": family,
+            "outcome": outcome,
+            "allowed_primitives": allowed_primitives,
+            "approximation_strategy": approx,
+            "reason": reason,
+        }
+
+    @staticmethod
+    def _create_family_prompt_addendum(policy, structural_spec=None):
+        family = str((policy or {}).get("family") or "")
+        outcome = str((policy or {}).get("outcome") or "exact")
+        approx = str((policy or {}).get("approximation_strategy") or "none")
+        reason = str((policy or {}).get("reason") or "").strip()
+        spec = dict(structural_spec or {})
+
+        common = (
+            "Structural Build Spec is the primary contract for create mode.\n"
+            f"Create family: {family}.\n"
+            f"Target outcome: {outcome}.\n"
+            f"Approximation strategy: {approx}.\n"
+        )
+        if reason:
+            common += f"Capability note: {reason}.\n"
+        if spec:
+            common += "Structural Build Spec JSON:\n"
+            common += json.dumps(spec, ensure_ascii=False, indent=2) + "\n"
+            common += "Synthesize CAD Plan from this spec. Preserve build_order and role intent.\n"
+        return common
+
+    @staticmethod
+    def _plan_primitive_counts(plan):
+        counts = {}
+        for step in (plan.get("steps") or []):
+            if not isinstance(step, dict):
+                continue
+            prim = str(step.get("primitive") or "").strip().lower()
+            if not prim:
+                continue
+            counts[prim] = counts.get(prim, 0) + 1
+        return counts
+
+    def _score_create_candidate_for_family(self, plan, family):
+        counts = self._plan_primitive_counts(plan)
+        rect = counts.get("rect_extrude", 0)
+        circle = counts.get("circle_extrude", 0)
+        poly = counts.get("poly_extrude", 0)
+        wedge = counts.get("wedge_extrude", 0)
+        cut = counts.get("cut_extrude", 0)
+        steps_n = len(plan.get("steps") or [])
+
+        score = 0.0
+        if family == "furniture_boxy_panel":
+            score += 2.0 * rect + 1.0 * cut + 0.5 * circle
+            score -= 1.5 * max(0, poly + wedge - rect - 1)
+        elif family == "lowpoly_hard_surface_vehicle":
+            score += 2.0 * (poly + wedge) + 1.2 * circle + 0.4 * rect + 0.8 * cut
+            if rect > (poly + wedge + 2):
+                score -= 3.0
+        elif family == "rotational_bodies":
+            score += 2.2 * circle + 1.0 * poly + 0.4 * cut
+            if rect > circle + 2:
+                score -= 2.5
+        elif family == "profile_driven_symmetric":
+            score += 1.8 * poly + 1.2 * rect + 0.9 * cut + 0.5 * circle
+
+        if steps_n < 3:
+            score -= 2.0
+        if steps_n > 18:
+            score -= float(steps_n - 18) * 0.6
+        return score
+
+    def _candidate_allowed_by_create_policy(self, plan, policy):
+        cap_model = default_capability_model()
+        allowed = set((policy or {}).get("allowed_primitives") or [])
+        for step in (plan.get("steps") or []):
+            if not isinstance(step, dict):
+                return False
+            primitive = str(step.get("primitive") or "").strip().lower()
+            operation = str(step.get("operation") or "").strip()
+            if primitive not in allowed:
+                return False
+            required = capability_required_for_primitive(primitive, operation)
+            if required == "unsupported":
+                return False
+            if not cap_model.supports(required):
+                return False
+        return True
+
+    @staticmethod
+    def _attach_create_policy_metadata(plan, policy, structural_spec=None):
+        if not isinstance(plan, dict):
+            return plan
+        global_cfg = plan.get("global")
+        if not isinstance(global_cfg, dict):
+            global_cfg = {}
+        p = dict(policy or {})
+        global_cfg["shape_family"] = p.get("family", "")
+        global_cfg["build_outcome_target"] = p.get("outcome", "exact")
+        global_cfg["approximation_policy"] = {
+            "strategy": p.get("approximation_strategy", ""),
+            "reason": p.get("reason", ""),
+        }
+        if isinstance(structural_spec, dict):
+            global_cfg["structural_spec"] = {
+                "object_family": structural_spec.get("object_family"),
+                "build_outcome_target": structural_spec.get("build_outcome_target"),
+                "construction_strategy": structural_spec.get("construction_strategy"),
+                "build_order": list(structural_spec.get("build_order") or []),
+                "main_roles": [
+                    (part or {}).get("role")
+                    for part in (structural_spec.get("main_masses") or [])
+                    if isinstance(part, dict)
+                ],
+            }
+        plan["global"] = global_cfg
+        return plan
+
+    def _prepare_create_candidates(self, candidates, policy, structural_spec=None):
+        family = str((policy or {}).get("family") or "")
+        cap_model = default_capability_model()
+        prepared = []
+        for plan in candidates:
+            if not isinstance(plan, dict):
+                continue
+            if not self._candidate_allowed_by_create_policy(plan, policy):
+                continue
+            annotated = self._attach_create_policy_metadata(plan, policy, structural_spec=structural_spec)
+            family_score = self._score_create_candidate_for_family(annotated, family)
+            structural_score = 0.0
+            structural_breakdown = None
+            if isinstance(structural_spec, dict):
+                ranked = rank_dsl_candidates([annotated], structural_spec, capabilities=cap_model)
+                if ranked:
+                    structural_score = float((ranked[0] or {}).get("score", 0.0))
+                    structural_breakdown = (ranked[0] or {}).get("breakdown")
+            combined = family_score + (3.0 * structural_score)
+            if isinstance(structural_breakdown, dict):
+                annotated.setdefault("global", {})
+                if isinstance(annotated["global"], dict):
+                    annotated["global"]["structural_rank"] = structural_breakdown
+            prepared.append((combined, annotated))
+        prepared.sort(key=lambda row: row[0], reverse=True)
+        return [p for _, p in prepared]
+
+    def _create_policy_failure_reason(self):
+        policy = self.last_create_policy if isinstance(self.last_create_policy, dict) else {}
+        if not policy:
+            return ""
+        if str(policy.get("outcome", "")) == "blocked":
+            return str(policy.get("reason", "")).strip()
+        return ""
+
+    @staticmethod
+    def _structural_roles_summary(spec):
+        if not isinstance(spec, dict):
+            return {"expected_count": 0, "main": [], "supporting": [], "secondary": []}
+        main = [str((p or {}).get("role") or "").strip() for p in (spec.get("main_masses") or []) if isinstance(p, dict)]
+        supporting = [str((p or {}).get("role") or "").strip() for p in (spec.get("supporting_parts") or []) if isinstance(p, dict)]
+        secondary = [str((p or {}).get("role") or "").strip() for p in (spec.get("secondary_parts") or []) if isinstance(p, dict)]
+        main = [r for r in main if r]
+        supporting = [r for r in supporting if r]
+        secondary = [r for r in secondary if r]
+        return {
+            "expected_count": len(main) + len(supporting) + len(secondary),
+            "main": main,
+            "supporting": supporting,
+            "secondary": secondary,
+        }
+
+    def _print_create_policy_summary(self, best_plan=None):
+        policy = self.last_create_policy if isinstance(self.last_create_policy, dict) else {}
+        spec = self.last_structural_spec if isinstance(self.last_structural_spec, dict) else {}
+        if not policy:
+            return
+        print(
+            "  Create policy: "
+            f"family={policy.get('family', '')} "
+            f"outcome={policy.get('outcome', '')} "
+            f"strategy={policy.get('approximation_strategy', '')}"
+        )
+        grammar = ""
+        if isinstance(best_plan, dict):
+            grammar = str(((best_plan.get("global") or {}).get("synthesis_grammar")) or "").strip()
+        if not grammar and spec:
+            grammar = str(spec.get("construction_strategy") or "").strip()
+        if grammar:
+            print(f"  Synthesis grammar: {grammar}")
+
+        roles = self._structural_roles_summary(spec)
+        if roles["expected_count"] > 0:
+            print(
+                "  Roles expected: "
+                f"{roles['expected_count']} "
+                f"(main={len(roles['main'])}, supporting={len(roles['supporting'])}, secondary={len(roles['secondary'])})"
+            )
+        if policy.get("reason"):
+            print(f"  Policy reason: {policy.get('reason')}")
+
+        if isinstance(best_plan, dict):
+            global_cfg = best_plan.get("global") if isinstance(best_plan.get("global"), dict) else {}
+            role_cov = global_cfg.get("structural_role_coverage") if isinstance(global_cfg.get("structural_role_coverage"), dict) else {}
+            rank = global_cfg.get("structural_rank") if isinstance(global_cfg.get("structural_rank"), dict) else {}
+            safety = global_cfg.get("create_safety") if isinstance(global_cfg.get("create_safety"), dict) else {}
+            coverage_ratio = role_cov.get("coverage_ratio")
+            if coverage_ratio is None:
+                coverage_ratio = rank.get("structural_coverage")
+            if coverage_ratio is not None:
+                role_to_step = rank.get("role_to_step_coherence")
+                attachment = rank.get("attachment_plausibility")
+                details = []
+                if role_to_step is not None:
+                    details.append(f"role_to_step={float(role_to_step):.2f}")
+                if attachment is not None:
+                    details.append(f"attachment={float(attachment):.2f}")
+                if safety:
+                    details.append(
+                        "safety="
+                        + str(safety.get("mode", ""))
+                        + f"(pruned={int(float(safety.get('risky_pruned_count', 0) or 0))},"
+                        + f"kept={int(float(safety.get('risky_retained_count', 0) or 0))})"
+                    )
+                details_s = (" " + " ".join(details)) if details else ""
+                print(f"  Role coverage summary: coverage={float(coverage_ratio):.2f}{details_s}")
+
+    def _print_iterative_create_summary(self, loop_trace):
+        rows = [r for r in (loop_trace or []) if isinstance(r, dict)]
+        if not rows:
+            return
+        print(f"  Iterative create loop: {len(rows)} cycles")
+        for row in rows[:10]:
+            it = int(row.get("iteration", 0) or 0)
+            action = str(row.get("action", "") or "")
+            phase = str(row.get("phase", "") or "")
+            roles = ",".join(row.get("selected_roles", []) or [])
+            reason = str(row.get("reason", "") or "")
+            ids = ",".join(row.get("executed_step_ids", []) or [])
+            msg = f"    - iter={it} action={action}"
+            if phase:
+                msg += f" phase={phase}"
+            if roles:
+                msg += f" roles=[{roles}]"
+            if ids:
+                msg += f" steps=[{ids}]"
+            if reason:
+                msg += f" reason={reason}"
+            print(msg)
+
+    def _sanitize_cad_plan(self, raw_plan, user_request, mode="create"):
+        if not isinstance(raw_plan, dict):
+            return None
+        session = str(raw_plan.get("session", "")).strip() or f"dsl_{int(time.time())}"
+        allowed_primitives = {str(p).strip().lower() for p in CAD_DSL_PRIMITIVES}
+        allowed_operations = {
+            "NewBodyFeatureOperation", "JoinFeatureOperation", "CutFeatureOperation"
+        }
+        allowed_modes = {"create", "edit"}
+
+        in_steps = raw_plan.get("steps", [])
+        if not isinstance(in_steps, list):
+            return None
+
+        clean_steps = []
+        used_ids = set()
+
+        for i, s in enumerate(in_steps):
+            if not isinstance(s, dict):
+                continue
+            step = dict(s)
+            sid = str(step.get("id", "")).strip() or f"step_{i+1}"
+            if sid in used_ids:
+                sid = f"{sid}_{i+1}"
+            used_ids.add(sid)
+
+            primitive = str(step.get("primitive", "rect_extrude")).strip().lower()
+            is_known_primitive = primitive in allowed_primitives
+
+            op = str(step.get("op", "ensure")).strip().lower()
+            if op not in ("ensure", "create", "update"):
+                op = "ensure"
+
+            plane_base, plane_off = self._parse_plane_and_offset(step.get("plane", "XY@0"))
+            plane = f"{plane_base}@{round(plane_off, 3)}" if abs(plane_off) > 1e-9 else plane_base
+
+            operation = str(step.get("operation", "NewBodyFeatureOperation")).strip()
+            if primitive == "cut_extrude":
+                operation = "CutFeatureOperation"
+            if operation not in allowed_operations:
+                operation = "NewBodyFeatureOperation"
+
+            distance = abs(self._to_float(step.get("distance", 1.0), 1.0))
+            if distance < 0.2:
+                distance = 0.2
+
+            profile = step.get("profile")
+            if not isinstance(profile, dict):
+                profile = {}
+
+            ptype = str(profile.get("type", "")).strip().lower()
+            if primitive in ("rect_extrude", "cut_extrude"):
+                if ptype not in ("", "rect"):
+                    ptype = "rect"
+                profile = {
+                    "type": "rect",
+                    "cx": round(self._to_float(profile.get("cx", 0.0), 0.0), 3),
+                    "cy": round(self._to_float(profile.get("cy", 0.0), 0.0), 3),
+                    "w": round(max(0.2, abs(self._to_float(profile.get("w", 10.0), 10.0))), 3),
+                    "h": round(max(0.2, abs(self._to_float(profile.get("h", 10.0), 10.0))), 3),
+                }
+            elif primitive == "circle_extrude":
+                profile = {
+                    "type": "circle",
+                    "cx": round(self._to_float(profile.get("cx", 0.0), 0.0), 3),
+                    "cy": round(self._to_float(profile.get("cy", 0.0), 0.0), 3),
+                    "radius": round(max(0.1, abs(self._to_float(profile.get("radius", 2.0), 2.0))), 3),
+                }
+            elif primitive in ("poly_extrude", "wedge_extrude"):
+                pts = profile.get("pts", []) if isinstance(profile.get("pts", []), list) else []
+                norm_pts = []
+                for p in pts:
+                    if not isinstance(p, dict):
+                        continue
+                    if "x" not in p or "y" not in p:
+                        continue
+                    norm_pts.append(
+                        {"x": round(self._to_float(p.get("x"), 0.0), 3), "y": round(self._to_float(p.get("y"), 0.0), 3)}
+                    )
+                if len(norm_pts) < 3:
+                    norm_pts = [
+                        {"x": -2.0, "y": -2.0},
+                        {"x": 2.0, "y": -2.0},
+                        {"x": 2.0, "y": 2.0},
+                        {"x": -2.0, "y": 2.0},
+                    ]
+                profile = {"type": "poly", "pts": norm_pts}
+            else:
+                # Keep advanced/unknown primitive payload as-is for honest validator rejection.
+                if not isinstance(profile, dict):
+                    profile = {}
+
+            clean_step = {
+                "id": sid,
+                "op": op,
+                "primitive": primitive if is_known_primitive else str(step.get("primitive", "")).strip().lower(),
+                "plane": plane,
+                "profile": profile,
+                "distance": round(distance, 3),
+                "operation": operation,
+            }
+            if isinstance(step.get("names"), dict):
+                clean_step["names"] = dict(step.get("names") or {})
+            if isinstance(step.get("selectors"), dict):
+                clean_step["selectors"] = dict(step.get("selectors") or {})
+            if primitive == "loft":
+                clean_step["loft"] = dict(step.get("loft") or {})
+            elif primitive == "sweep":
+                clean_step["sweep"] = dict(step.get("sweep") or {})
+            elif primitive == "fillet":
+                clean_step["fillet"] = dict(step.get("fillet") or {})
+            elif primitive == "chamfer":
+                clean_step["chamfer"] = dict(step.get("chamfer") or {})
+            elif primitive == "revolve":
+                clean_step["revolve"] = dict(step.get("revolve") or {})
+
+            clean_steps.append(clean_step)
+
+        if not clean_steps:
+            return None
+
+        budget_raw = raw_plan.get("budget", {}) if isinstance(raw_plan.get("budget"), dict) else {}
+        max_steps = int(max(1, min(40, self._to_float(budget_raw.get("max_steps", 25), 25))))
+        max_parts = int(max(1, min(40, self._to_float(budget_raw.get("max_parts", 18), 18))))
+        requested_mode = str(mode or "create").strip().lower()
+        if requested_mode not in allowed_modes:
+            requested_mode = "create"
+        plan = {
+            "units": "cm",
+            "session": session,
+            "mode": requested_mode,
+            "budget": {"max_steps": max_steps, "max_parts": max_parts},
+            "global": raw_plan.get("global", {"source": "cad_dsl_text_planner"}),
+            "steps": clean_steps[:max_steps],
+        }
+        if not isinstance(plan["global"], dict):
+            plan["global"] = {"source": "cad_dsl_text_planner"}
+        plan["global"].setdefault("request", str(user_request or "")[:240])
+        return plan
+
+    def _resolve_create_structural_context(self, user_request, images=None):
+        specs = self._select_structural_specs_for_create(user_request, images=images)
+        if not specs:
+            self.last_structural_spec = None
+            self.last_create_policy = {
+                "family": "",
+                "outcome": "blocked",
+                "allowed_primitives": [],
+                "approximation_strategy": "blocked",
+                "reason": "structural planner produced no valid spec candidates",
+            }
+            return self.last_create_policy, []
+
+        best_spec = specs[0]
+        self.last_structural_spec = dict(best_spec)
+        create_policy = self._build_create_policy(user_request, images=images, structural_spec=best_spec)
+        self.last_create_policy = dict(create_policy)
+        return create_policy, specs
+
+    def _synthesize_candidates_from_structural_specs(self, user_request, mode, specs, images=None):
+        req = str(user_request or "").strip()
+        if not req or not specs:
+            return []
+        n = max(1, min(8, int(DSL_CANDIDATE_COUNT)))
+        cap_model = default_capability_model()
+        use_specs = [s for s in specs[:2] if isinstance(s, dict)]
+        if not use_specs:
+            return []
+
+        # Primary path: deterministic family grammar synthesis.
+        synthesized = []
+        per_spec = max(1, n // len(use_specs))
+        for spec in use_specs:
+            fam_candidates = synthesize_dsl_candidates_from_structural_spec(
+                spec,
+                user_request=req,
+                candidate_count=per_spec,
+                mode=mode,
+                capabilities=cap_model,
+            )
+            for plan in fam_candidates:
+                plan = self._sanitize_cad_plan(plan, req, mode=mode)
+                if isinstance(plan, dict):
+                    plan.setdefault("global", {})
+                    if isinstance(plan["global"], dict):
+                        plan["global"]["structural_spec_family"] = spec.get("object_family", "")
+                        plan["global"].setdefault("source", "structural_spec_family_grammar")
+                    synthesized.append(plan)
+
+        # Optional augmentation: one LLM candidate per top spec, kept only if capability-safe.
+        llm_augmented = []
+        for spec in use_specs:
+            create_policy = self._build_create_policy(req, images=images, structural_spec=spec)
+            addendum = self._create_family_prompt_addendum(create_policy, structural_spec=spec)
+            request_text = (
+                f"User request: {req}\n"
+                f"Mode: {mode}\n"
+                + addendum
+                + "Output one complete CAD Plan JSON."
+            )
+            try:
+                if images:
+                    raw = self._call_llm_with_images(CAD_DSL_VISUAL_PLANNER_PROMPT, request_text, images)
+                else:
+                    raw = self._call_llm(CAD_DSL_PLANNER_PROMPT, request_text)
+                payload = self._parse_json(raw)
+                plan = self._sanitize_cad_plan(payload, req, mode=mode)
+                if isinstance(plan, dict):
+                    if self._candidate_allowed_by_create_policy(plan, create_policy):
+                        plan.setdefault("global", {})
+                        if isinstance(plan["global"], dict):
+                            plan["global"]["structural_spec_family"] = spec.get("object_family", "")
+                            plan["global"].setdefault("source", "structural_spec_llm_augmented")
+                        llm_augmented.append(plan)
+            except Exception:
+                pass
+
+        # Grammar plans are primary; LLM candidates are supplemental.
+        return synthesized + llm_augmented
+
+    def _plan_text_to_cad_candidates(self, user_request, mode="create"):
+        """Generate CAD DSL candidates from structural build specs (create) or direct LLM (edit)."""
+        req = str(user_request or "").strip()
+        if not req:
+            return []
+        mode_norm = str(mode or "create").strip().lower()
+        if mode_norm == "create":
+            create_policy, specs = self._resolve_create_structural_context(req, images=None)
+            if create_policy.get("outcome") == "blocked":
+                return []
+            candidates = self._synthesize_candidates_from_structural_specs(req, mode, specs, images=None)
+            return self._prepare_create_candidates(candidates, create_policy, structural_spec=specs[0] if specs else None)
+
+        self.last_create_policy = None
+        self.last_structural_spec = None
+        n = max(1, min(8, int(DSL_CANDIDATE_COUNT)))
+        candidates = []
+        request_text = (
+            f"User request: {req}\n"
+            f"Mode: {mode}\n"
+            "Output one complete CAD Plan JSON."
+        )
+        for _ in range(n):
+            try:
+                raw = self._call_llm(CAD_DSL_PLANNER_PROMPT, request_text)
+                payload = self._parse_json(raw)
+                plan = self._sanitize_cad_plan(payload, req, mode=mode)
+                if plan is not None:
+                    candidates.append(plan)
+            except Exception:
+                continue
+        return candidates
+
+    def _plan_images_to_cad_candidates(self, user_request, images, mode="create"):
+        req = str(user_request or "").strip()
+        if not req or not images:
+            return []
+        mode_norm = str(mode or "create").strip().lower()
+        if mode_norm == "create":
+            create_policy, specs = self._resolve_create_structural_context(req, images=images)
+            if create_policy.get("outcome") == "blocked":
+                return []
+            candidates = self._synthesize_candidates_from_structural_specs(req, mode, specs, images=images)
+            return self._prepare_create_candidates(candidates, create_policy, structural_spec=specs[0] if specs else None)
+
+        self.last_create_policy = None
+        self.last_structural_spec = None
+        n = max(1, min(8, int(DSL_CANDIDATE_COUNT)))
+        candidates = []
+        request_text = (
+            f"User request: {req}\n"
+            f"Mode: {mode}\n"
+            "Build one physically plausible CAD plan from these images.\n"
+            + "Output one complete CAD Plan JSON."
+        )
+        for _ in range(n):
+            try:
+                raw = self._call_llm_with_images(CAD_DSL_VISUAL_PLANNER_PROMPT, request_text, images)
+                payload = self._parse_json(raw)
+                plan = self._sanitize_cad_plan(payload, req, mode=mode)
+                if plan is not None:
+                    candidates.append(plan)
+            except Exception:
+                continue
+        return candidates
+
+    def _legacy_bboxes_to_cad_plan(self, parts, user_request, mode="create"):
+        try:
+            structural = structural_from_legacy_bboxes(parts or [])
+            planner = LegacyBboxCadPlanner()
+            raw_plan = planner.plan(structural, session=f"legacy_{int(time.time())}", mode=mode)
+            plan = self._sanitize_cad_plan(raw_plan, user_request, mode=mode)
+            if isinstance(plan, dict):
+                plan.setdefault("global", {})
+                if isinstance(plan["global"], dict):
+                    plan["global"]["source"] = "legacy_bbox_fallback"
+            return plan
+        except Exception:
+            return None
+
+    @staticmethod
+    def _print_cad_trace(result, max_events=16):
+        if not result or not getattr(result, "trace", None):
+            return
+        print("  Trace:")
+        for ev in list(result.trace)[:max_events]:
+            path = " -> ".join(getattr(ev, "backend_path", []) or [])
+            reason = getattr(ev, "reason", "") or ""
+            line = (
+                f"    - step={getattr(ev, 'step_id', '')} "
+                f"primitive={getattr(ev, 'primitive', '')} "
+                f"action={getattr(ev, 'action', '')}"
+            )
+            if path:
+                line += f" backend={path}"
+            if reason:
+                line += f" reason={reason}"
+            print(line)
+
+    def _execute_cad_dsl_best(self, candidates, mode="create", previous_plan=None, user_request=""):
+        if not candidates:
+            return False, None, None
+
+        cap_model = default_capability_model()
+        mode_norm = str(mode or "create").strip().lower()
+        self.last_iterative_loop_trace = []
+        self.last_iterative_state_snapshots = []
+        if mode_norm == "edit":
+            valid_candidates = []
+            for p in candidates:
+                vr = validate_plan(p, capabilities=cap_model, allow_unsupported=False)
+                if vr.valid:
+                    valid_candidates.append(p)
+            if not valid_candidates:
+                print("  CAD DSL planner: no valid edit candidates.")
+                return False, None, None
+            best_plan = valid_candidates[0]
+            best_idx = candidates.index(best_plan)
+            result = run_cad_operator(
+                self.fusion,
+                best_plan,
+                dry_run=False,
+                step_delay=STEP_DELAY,
+                edit_mode=True,
+                previous_plan=previous_plan,
+                capabilities=cap_model,
+            )
+        else:
+            structural_spec = self.last_structural_spec if isinstance(self.last_structural_spec, dict) else {}
+            request_text = str(user_request or self.last_request or "").strip()
+            if structural_spec:
+                agent = IterativeCreateAgent(
+                    self.fusion,
+                    capabilities=cap_model,
+                    step_delay=STEP_DELAY,
+                )
+                outcome = agent.run(
+                    user_request=request_text,
+                    structural_spec=structural_spec,
+                    candidates=candidates,
+                )
+                best_idx = outcome.best_index
+                best_plan = outcome.best_plan
+                result = outcome.result
+                self.last_iterative_loop_trace = list(outcome.loop_trace or [])
+                self.last_iterative_state_snapshots = list(outcome.state_snapshots or [])
+                print("  Create execution mode: iterative tool-driven CAD agent")
+                self._print_iterative_create_summary(self.last_iterative_loop_trace)
+            else:
+                # Fallback only when structural context is unavailable.
+                try:
+                    self.fusion.clear()
+                    self.fusion.refresh()
+                except Exception:
+                    pass
+                best_idx, best_plan, result = run_best_of_n_create(
+                    self.fusion,
+                    candidates,
+                    dry_run=False,
+                    step_delay=STEP_DELAY,
+                    pre_render_fix_fn=pre_render_fix,
+                    call_llm=self._call_llm,
+                    capabilities=cap_model,
+                )
+                if best_idx < 0:
+                    print("  CAD DSL planner: no valid candidates.")
+                    return False, None, result
+
+        if result.success:
+            print(f"  CAD DSL execution OK: {result.message}")
+            print(f"  Candidate selected: {best_idx + 1}/{len(candidates)}")
+            self._print_cad_trace(result)
+            return True, best_plan, result
+        print(f"  CAD DSL execution failed: {result.message}")
+        self._print_cad_trace(result)
+        return False, best_plan, result
 
     def _revise_model_parts(self, current_parts, user_request):
         """Given current bbox list and user request to extend/modify, return full updated parts list."""
@@ -2952,11 +3864,16 @@ class FusionAIAssistant:
     def run(self):
         sep = "=" * 64
         print(sep)
-        print("  Fusion 360 AI Assistant  (two-step pipeline)")
+        print("  Fusion 360 AI Assistant  (CAD DSL-first pipeline)")
         print(f"  Provider: {self.provider}  |  Model: {self.model}")
-        print("  Pipeline: Architect LLM в†’ Deterministic Encoder в†’ Fusion 360")
+        if USE_CAD_DSL_PLANNER:
+            print("  Pipeline: Structural Spec -> family grammar DSL -> iterative tool-driven execute/inspect loop -> Fusion 360")
+        else:
+            print("  Pipeline: Architect LLM -> Deterministic Encoder -> Fusion 360")
         print("  Describe what you want to build in plain text. To extend current model: e.g. 'add armrests', 'make the back higher'.")
         print(f"  Visual review: {'ON' if self.review_enabled else 'OFF'}")
+        print(f"  CAD DSL planner: {'ON' if USE_CAD_DSL_PLANNER else 'OFF (legacy bbox mode)'}")
+        print(f"  Legacy bbox fallback for vision: {'ON' if USE_LEGACY_BBOX_FALLBACK else 'OFF'}")
         print("  Commands: exit | clear | detach | relaunch | review on/off/status | save <name[.ext]> | ping | help")
         print(sep)
 
@@ -3001,6 +3918,7 @@ class FusionAIAssistant:
                 print("    - build from folder <path> (multi-view: all photos are one object)")
                 print("    - detail <what to add/refine> (refine current model with functional details)")
                 print("    - detail program <what to add/refine> (plan and execute detail actions)")
+                print("  Default path is CAD DSL iterative create agent (spec -> stepwise plan/inspect/execute).")
                 print("  To extend current model: e.g. 'add armrests', 'make the back higher' (no command).")
                 print()
                 continue
@@ -3074,6 +3992,10 @@ class FusionAIAssistant:
                     continue
                 self.fusion.clear()
                 self.fusion.refresh()
+                self.last_parts = []
+                self.last_cad_plan = None
+                self.last_request = ""
+                self.last_images = []
                 print("  Model cleared.\n")
                 continue
 
@@ -3110,6 +4032,7 @@ class FusionAIAssistant:
                     detailed,
                     images=self.last_images if self.last_images else None,
                 )
+                self.last_cad_plan = None
                 self.last_request = f"detail {detail_req}"
                 print("  Done.\n")
                 continue
@@ -3146,6 +4069,7 @@ class FusionAIAssistant:
                     merged = list(self.last_parts) + added_parts
                     merged = self._sanitize_parts(merged, normalize_frame=False)
                     self.last_parts = self._limit_parts_for_stability(merged, max_parts=DETAILING_MAX_PARTS)
+                self.last_cad_plan = None
                 self.last_request = f"detail program {req}"
                 print("  Done.\n")
                 continue
@@ -3171,6 +4095,43 @@ class FusionAIAssistant:
                 images = self._load_images_from_paths(img_files)
                 if not images:
                     print("  Failed to read images from folder.\n")
+                    continue
+                if USE_CAD_DSL_PLANNER:
+                    print(f"\n  [CAD DSL] Vision planning from folder ({len(images)} views)...\n")
+                    req = f"Build CAD model from folder: {folder}"
+                    candidates = self._plan_images_to_cad_candidates(req, images, mode="create")
+                    if not candidates and USE_LEGACY_BBOX_FALLBACK:
+                        print("  CAD DSL image planner returned no plan. Trying explicit legacy bbox fallback...\n")
+                        try:
+                            result = self.decompose_from_images(images)
+                            parts = result.get("parts", [])
+                        except Exception:
+                            parts = []
+                        legacy_plan = self._legacy_bboxes_to_cad_plan(parts, req, mode="create") if parts else None
+                        if legacy_plan is not None:
+                            candidates = [legacy_plan]
+                    if not candidates:
+                        reason = self._create_policy_failure_reason()
+                        if reason:
+                            print(f"  Create policy blocked: {reason}")
+                        print("  CAD DSL planner produced no valid plans for this folder.\n")
+                        continue
+                    print(f"  CAD DSL candidates: {len(candidates)}")
+                    self._print_create_policy_summary()
+                    ok, best_plan, _ = self._execute_cad_dsl_best(
+                        candidates,
+                        mode="create",
+                        user_request=req,
+                    )
+                    if not ok:
+                        print("  Build failed in CAD DSL mode.\n")
+                        continue
+                    self._print_create_policy_summary(best_plan=best_plan)
+                    self.last_cad_plan = best_plan
+                    self.last_parts = []
+                    self.last_request = f"build from folder {folder}"
+                    self.last_images = images
+                    print("  Done.\n")
                     continue
                 print(f"\n  [Step A] Architect (multi-view): using {len(images)} images from folder...\n")
                 print("  View order sent to model:")
@@ -3230,6 +4191,7 @@ class FusionAIAssistant:
                     parts,
                     images=images,
                 )
+                self.last_cad_plan = None
                 self.last_request = f"build from folder {folder}"
                 self.last_images = images
                 print("  Done.\n")
@@ -3253,6 +4215,43 @@ class FusionAIAssistant:
                 images = self._load_images_from_paths([img_path])
                 if not images:
                     print("  Could not read image.\n")
+                    continue
+                if USE_CAD_DSL_PLANNER:
+                    print("\n  [CAD DSL] Vision planning from image...\n")
+                    req = f"Build CAD model from image: {path_str}"
+                    candidates = self._plan_images_to_cad_candidates(req, images, mode="create")
+                    if not candidates and USE_LEGACY_BBOX_FALLBACK:
+                        print("  CAD DSL image planner returned no plan. Trying explicit legacy bbox fallback...\n")
+                        try:
+                            result = self.decompose_from_images(images)
+                            parts = result.get("parts", [])
+                        except Exception:
+                            parts = []
+                        legacy_plan = self._legacy_bboxes_to_cad_plan(parts, req, mode="create") if parts else None
+                        if legacy_plan is not None:
+                            candidates = [legacy_plan]
+                    if not candidates:
+                        reason = self._create_policy_failure_reason()
+                        if reason:
+                            print(f"  Create policy blocked: {reason}")
+                        print("  CAD DSL planner produced no valid plans for this image.\n")
+                        continue
+                    print(f"  CAD DSL candidates: {len(candidates)}")
+                    self._print_create_policy_summary()
+                    ok, best_plan, _ = self._execute_cad_dsl_best(
+                        candidates,
+                        mode="create",
+                        user_request=req,
+                    )
+                    if not ok:
+                        print("  Build failed in CAD DSL mode.\n")
+                        continue
+                    self._print_create_policy_summary(best_plan=best_plan)
+                    self.last_cad_plan = best_plan
+                    self.last_parts = []
+                    self.last_request = f"build from image {path_str}"
+                    self.last_images = images
+                    print("  Done.\n")
                     continue
                 print(f"\n  [Step A] Architect (vision): decomposing object from image...\n")
                 try:
@@ -3308,6 +4307,7 @@ class FusionAIAssistant:
                     parts,
                     images=images,
                 )
+                self.last_cad_plan = None
                 self.last_request = f"build from image {path_str}"
                 self.last_images = images
                 print("  Done.\n")
@@ -3368,6 +4368,7 @@ class FusionAIAssistant:
                         continue
                     # No bbox-based review for reconstructed CAD sequences.
                     self.last_parts = []
+                    self.last_cad_plan = None
                     self.last_request = f"build model {model_id}"
                     self.last_images = []
                     continue
@@ -3386,6 +4387,7 @@ class FusionAIAssistant:
                 print("  [Execute] Building in Fusion 360...\n")
                 self.execute_plan(steps)
                 self.last_parts = self._interactive_user_refine(f"build model {model_id}", parts)
+                self.last_cad_plan = None
                 self.last_request = f"build model {model_id}"
                 self.last_images = []
                 print()
@@ -3394,6 +4396,42 @@ class FusionAIAssistant:
             if not self.ensure_connection():
                 continue
 
+            if USE_CAD_DSL_PLANNER:
+                has_existing_plan = bool(isinstance(self.last_cad_plan, dict) and self.last_cad_plan.get("steps"))
+                intent = self._intent_extend_or_new(command_input, has_existing_plan)
+                mode = "edit" if intent == "extend" and has_existing_plan else "create"
+                print(f"\n  [CAD DSL] Planning candidate plans from request (mode={mode})...\n")
+                candidates = self._plan_text_to_cad_candidates(command_input, mode=mode)
+                if not candidates:
+                    if mode == "create":
+                        reason = self._create_policy_failure_reason()
+                        if reason:
+                            print(f"  Create policy blocked: {reason}")
+                    print("  CAD DSL planner produced no valid JSON plans. Try rephrasing request.\n")
+                    continue
+                print(f"  CAD DSL candidates: {len(candidates)}")
+                if mode == "create":
+                    self._print_create_policy_summary()
+                ok, best_plan, _ = self._execute_cad_dsl_best(
+                    candidates,
+                    mode=mode,
+                    previous_plan=self.last_cad_plan if mode == "edit" else None,
+                    user_request=command_input,
+                )
+                if not ok:
+                    print("  Build failed in CAD DSL mode.\n")
+                    continue
+                if mode == "create":
+                    self._print_create_policy_summary(best_plan=best_plan)
+                # In DSL-first mode bbox refinement is intentionally disabled.
+                self.last_cad_plan = best_plan
+                self.last_parts = []
+                self.last_request = command_input
+                self.last_images = []
+                print()
+                continue
+
+            parts = []
             intent = self._intent_extend_or_new(command_input, bool(self.last_parts))
             if intent == "extend" and self.last_parts:
                 # User wants to add to or modify the current model вЂ” revise, don't decompose from scratch
@@ -3448,7 +4486,7 @@ class FusionAIAssistant:
             # --- Execute in Fusion 360 ---
             print("  [Execute] Building in Fusion 360...\n")
             self.execute_plan(steps)
-            if ENABLE_AUTO_DETAIL_PROGRAM:
+            if ENABLE_AUTO_DETAIL_PROGRAM and self._should_auto_detail(command_input):
                 print("  [AutoDetail] Running automatic detail loop...\n")
                 parts = self._auto_detail_program(
                     parts,
@@ -3456,7 +4494,10 @@ class FusionAIAssistant:
                     images=None,
                     rounds=AUTO_DETAIL_PROGRAM_ROUNDS,
                 )
+            elif ENABLE_AUTO_DETAIL_PROGRAM:
+                print("  [AutoDetail] Skipped (no explicit detail intent).\n")
             self.last_parts = self._interactive_user_refine(command_input, parts)
+            self.last_cad_plan = None
             self.last_request = command_input
             self.last_images = []
             print()
@@ -3476,5 +4517,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

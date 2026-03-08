@@ -1,0 +1,1024 @@
+{
+  "prompt": "Build a bottle",
+  "spec_family": "rotational_bodies",
+  "success": true,
+  "result_message": "Iterative create completed: 2/4 steps",
+  "executed_step_ids": [
+    "radial_core",
+    "neck_or_top"
+  ],
+  "loop_trace": [
+    {
+      "iteration": 1,
+      "action": "created",
+      "phase": "core",
+      "selected_roles": [
+        "radial_core"
+      ],
+      "executed_step_ids": [
+        "radial_core"
+      ]
+    },
+    {
+      "iteration": 1,
+      "action": "post_step_eval",
+      "phase": "core",
+      "disconnected_components": 0,
+      "floating_parts_count": 0,
+      "attachment_plausibility": 1.0
+    },
+    {
+      "iteration": 2,
+      "action": "created",
+      "phase": "core",
+      "selected_roles": [
+        "neck_or_top"
+      ],
+      "executed_step_ids": [
+        "neck_or_top"
+      ]
+    },
+    {
+      "iteration": 2,
+      "action": "post_step_eval",
+      "phase": "core",
+      "disconnected_components": 0,
+      "floating_parts_count": 0,
+      "attachment_plausibility": 1.0
+    },
+    {
+      "iteration": 3,
+      "action": "stop",
+      "phase": "core",
+      "reason": "defer non-core role=base_ring until primary masses complete",
+      "selected_roles": []
+    }
+  ],
+  "final_snapshot": {
+    "list_tools": [
+      {
+        "name": "add_arc",
+        "category": "sketch",
+        "description": "Add arc to sketch",
+        "required_fields": [
+          "angle",
+          "pt1",
+          "pt2",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "transform"
+        ]
+      },
+      {
+        "name": "add_circle",
+        "category": "sketch",
+        "description": "Add circle to sketch",
+        "required_fields": [
+          "pt",
+          "radius",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "transform"
+        ]
+      },
+      {
+        "name": "add_extrude",
+        "category": "feature",
+        "description": "Extrude sketch profile",
+        "required_fields": [
+          "distance",
+          "operation",
+          "profile_id",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "feature_name"
+        ]
+      },
+      {
+        "name": "add_extrude_by_target_face",
+        "category": "target",
+        "description": "Extrude between two target faces",
+        "required_fields": [
+          "end_face",
+          "operation",
+          "start_face"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "add_extrudes_by_target_face",
+        "category": "target",
+        "description": "Run batch face extrusions",
+        "required_fields": [
+          "actions"
+        ],
+        "optional_fields": [
+          "revert"
+        ]
+      },
+      {
+        "name": "add_line",
+        "category": "sketch",
+        "description": "Add line to sketch",
+        "required_fields": [
+          "pt1",
+          "pt2",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "transform"
+        ]
+      },
+      {
+        "name": "add_point",
+        "category": "sketch",
+        "description": "Add point to sketch path",
+        "required_fields": [
+          "pt",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "transform"
+        ]
+      },
+      {
+        "name": "add_sketch",
+        "category": "sketch",
+        "description": "Create or ensure sketch",
+        "required_fields": [
+          "sketch_plane"
+        ],
+        "optional_fields": [
+          "sketch_name"
+        ]
+      },
+      {
+        "name": "brep",
+        "category": "export",
+        "description": "Export brep (.step/.smt/.f3d)",
+        "required_fields": [
+          "file"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "clear",
+        "category": "system",
+        "description": "Clear design",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "close_profile",
+        "category": "sketch",
+        "description": "Close sketch profile",
+        "required_fields": [
+          "sketch_name"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "find_entity_by_name",
+        "category": "query",
+        "description": "Find sketch/feature by stable name",
+        "required_fields": [
+          "name",
+          "type"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "get_active_construction_context",
+        "category": "query",
+        "description": "Get active construction context",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_bodies",
+        "category": "query",
+        "description": "Get body list",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_body_bbox",
+        "category": "query",
+        "description": "Get body bounding boxes",
+        "required_fields": [],
+        "optional_fields": [
+          "body_name"
+        ]
+      },
+      {
+        "name": "get_body_relations",
+        "category": "query",
+        "description": "Get body-to-body relation summary",
+        "required_fields": [],
+        "optional_fields": [
+          "contact_tolerance"
+        ]
+      },
+      {
+        "name": "get_connected_components",
+        "category": "query",
+        "description": "Get connected components from body relations",
+        "required_fields": [],
+        "optional_fields": [
+          "contact_tolerance"
+        ]
+      },
+      {
+        "name": "get_edges",
+        "category": "query",
+        "description": "Get edge summary",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_faces",
+        "category": "query",
+        "description": "Get face summary",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_feature_bbox",
+        "category": "query",
+        "description": "Get feature bounding boxes",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_feature_body_relations",
+        "category": "query",
+        "description": "Get feature-to-body relation summary",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_features",
+        "category": "query",
+        "description": "Get feature list",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_model_state",
+        "category": "query",
+        "description": "Get model state summary",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_overlaps",
+        "category": "query",
+        "description": "Get overlaps/intersections/contact-like summary",
+        "required_fields": [],
+        "optional_fields": [
+          "contact_tolerance"
+        ]
+      },
+      {
+        "name": "get_parts",
+        "category": "query",
+        "description": "Get part list",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "get_sketches",
+        "category": "query",
+        "description": "Get sketch list",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "graph",
+        "category": "export",
+        "description": "Export graph representation",
+        "required_fields": [
+          "format",
+          "labels",
+          "sequence"
+        ],
+        "optional_fields": [
+          "file"
+        ]
+      },
+      {
+        "name": "list_features",
+        "category": "query",
+        "description": "List sketches/extrudes",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "list_tools",
+        "category": "system",
+        "description": "List available server tools and minimal payload contracts",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "mesh",
+        "category": "export",
+        "description": "Export mesh (.obj/.stl)",
+        "required_fields": [
+          "file"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "ping",
+        "category": "system",
+        "description": "Ping server",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "query_bounding_box",
+        "category": "query",
+        "description": "Query current bounding box",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "reconstruct",
+        "category": "reconstruction",
+        "description": "Reconstruct design from JSON payload",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "reconstruct_curve",
+        "category": "reconstruction",
+        "description": "Reconstruct one curve",
+        "required_fields": [
+          "curve_id",
+          "sketch_data",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "rotate",
+          "scale",
+          "translate"
+        ]
+      },
+      {
+        "name": "reconstruct_curves",
+        "category": "reconstruction",
+        "description": "Reconstruct all curves",
+        "required_fields": [
+          "sketch_data",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "rotate",
+          "scale",
+          "translate"
+        ]
+      },
+      {
+        "name": "reconstruct_profile",
+        "category": "reconstruction",
+        "description": "Reconstruct one profile",
+        "required_fields": [
+          "profile_id",
+          "sketch_data",
+          "sketch_name"
+        ],
+        "optional_fields": [
+          "rotate",
+          "scale",
+          "translate"
+        ]
+      },
+      {
+        "name": "reconstruct_sketch",
+        "category": "reconstruction",
+        "description": "Reconstruct a single sketch",
+        "required_fields": [
+          "sketch_data"
+        ],
+        "optional_fields": [
+          "rotate",
+          "scale",
+          "sketch_plane",
+          "translate"
+        ]
+      },
+      {
+        "name": "reconstruct_stepwise",
+        "category": "reconstruction",
+        "description": "Reconstruct incrementally with delay",
+        "required_fields": [],
+        "optional_fields": [
+          "delay",
+          "json_data"
+        ]
+      },
+      {
+        "name": "refresh",
+        "category": "system",
+        "description": "Refresh design state",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "revert_to_target",
+        "category": "target",
+        "description": "Revert reconstruction to target",
+        "required_fields": [],
+        "optional_fields": []
+      },
+      {
+        "name": "screenshot",
+        "category": "export",
+        "description": "Capture viewport screenshot",
+        "required_fields": [
+          "file"
+        ],
+        "optional_fields": [
+          "fit_camera",
+          "height",
+          "width"
+        ]
+      },
+      {
+        "name": "set_target",
+        "category": "target",
+        "description": "Set target CAD body for face-extrusion flow",
+        "required_fields": [
+          "file",
+          "file_data"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "sketches",
+        "category": "export",
+        "description": "Export sketches (.png/.dxf)",
+        "required_fields": [
+          "format"
+        ],
+        "optional_fields": []
+      },
+      {
+        "name": "update_extrude",
+        "category": "feature",
+        "description": "Update extrude distance by feature name",
+        "required_fields": [
+          "distance",
+          "feature_name"
+        ],
+        "optional_fields": []
+      }
+    ],
+    "list_capabilities": {
+      "sketch_rect": {
+        "status": "supported",
+        "reason": ""
+      },
+      "sketch_circle": {
+        "status": "supported",
+        "reason": ""
+      },
+      "sketch_poly": {
+        "status": "supported",
+        "reason": ""
+      },
+      "sketch_arc": {
+        "status": "unsupported",
+        "reason": "arcs are rejected by validator/compiler in current backend"
+      },
+      "profile_close": {
+        "status": "supported",
+        "reason": ""
+      },
+      "extrude_new_body": {
+        "status": "supported",
+        "reason": ""
+      },
+      "extrude_cut": {
+        "status": "supported",
+        "reason": ""
+      },
+      "update_extrude_distance": {
+        "status": "supported",
+        "reason": ""
+      },
+      "list_tools": {
+        "status": "supported",
+        "reason": ""
+      },
+      "list_capabilities": {
+        "status": "supported",
+        "reason": ""
+      },
+      "find_entity_by_name": {
+        "status": "supported",
+        "reason": ""
+      },
+      "list_entities": {
+        "status": "supported",
+        "reason": ""
+      },
+      "list_features": {
+        "status": "supported",
+        "reason": ""
+      },
+      "get_features": {
+        "status": "supported",
+        "reason": "exact list when get_features command is available"
+      },
+      "get_model_state": {
+        "status": "supported",
+        "reason": "exact summary when server command is available"
+      },
+      "model_state_summary": {
+        "status": "supported",
+        "reason": ""
+      },
+      "get_sketches": {
+        "status": "supported",
+        "reason": "exact list when get_sketches command is available"
+      },
+      "get_bodies": {
+        "status": "partial",
+        "reason": "exact body list when command exists, otherwise feature-proxy"
+      },
+      "get_parts": {
+        "status": "partial",
+        "reason": "alias of bodies"
+      },
+      "get_faces": {
+        "status": "partial",
+        "reason": "exact summary when command exists, otherwise heuristic estimate"
+      },
+      "get_edges": {
+        "status": "partial",
+        "reason": "exact summary when command exists, otherwise heuristic estimate"
+      },
+      "get_body_bbox": {
+        "status": "partial",
+        "reason": "exact per-body bbox when command exists, otherwise model bbox fallback"
+      },
+      "get_feature_bbox": {
+        "status": "partial",
+        "reason": "exact per-feature bbox when command exists"
+      },
+      "get_body_relations": {
+        "status": "partial",
+        "reason": "exact intersections + contact estimates"
+      },
+      "get_feature_body_relations": {
+        "status": "partial",
+        "reason": "exact feature-to-body mapping when command exists"
+      },
+      "get_connected_components": {
+        "status": "partial",
+        "reason": "exact/derived when geometry graph is available"
+      },
+      "get_overlaps": {
+        "status": "partial",
+        "reason": "exact intersections when geometry graph is available"
+      },
+      "active_construction_context": {
+        "status": "supported",
+        "reason": "derived from feature/sketch recency"
+      },
+      "screenshot": {
+        "status": "supported",
+        "reason": ""
+      },
+      "bbox_query": {
+        "status": "supported",
+        "reason": ""
+      },
+      "fillet": {
+        "status": "unsupported",
+        "reason": "dsl-level only; execution not implemented"
+      },
+      "chamfer": {
+        "status": "unsupported",
+        "reason": "dsl-level placeholder"
+      },
+      "revolve": {
+        "status": "unsupported",
+        "reason": "dsl-level placeholder"
+      },
+      "loft": {
+        "status": "unsupported",
+        "reason": "dsl-level only; execution not implemented"
+      },
+      "sweep": {
+        "status": "unsupported",
+        "reason": "dsl-level only; execution not implemented"
+      },
+      "sketch_edit_existing": {
+        "status": "partial",
+        "reason": "existing sketch is authoritative by name; geometry edit-in-place is not implemented"
+      },
+      "suppress_feature": {
+        "status": "unsupported",
+        "reason": "not implemented"
+      },
+      "delete_feature": {
+        "status": "unsupported",
+        "reason": "not implemented"
+      },
+      "edge_query": {
+        "status": "unsupported",
+        "reason": "not implemented"
+      },
+      "face_query": {
+        "status": "unsupported",
+        "reason": "not implemented"
+      }
+    },
+    "get_model_state": {
+      "component_name": "(Unsaved)",
+      "counts": {
+        "sketches": 2,
+        "extrude_features": 2,
+        "bodies": 1
+      },
+      "bounding_box": {
+        "type": "BoundingBox3D",
+        "max_point": {
+          "type": "Point3D",
+          "x": 8.501,
+          "y": 8.501,
+          "z": 19.001
+        },
+        "min_point": {
+          "type": "Point3D",
+          "x": -8.501,
+          "y": -8.501,
+          "z": -0.001
+        }
+      },
+      "feature_body_relations": [
+        {
+          "feature_name": "syn_rotational_bodies_1772997891691_1__radial_core__feat",
+          "feature_type": "ExtrudeFeature",
+          "body_ids": [
+            "Body1#1"
+          ],
+          "source_kind": "exact_fusion_api"
+        },
+        {
+          "feature_name": "syn_rotational_bodies_1772997891691_1__neck_or_top__feat",
+          "feature_type": "ExtrudeFeature",
+          "body_ids": [
+            "Body1#1"
+          ],
+          "source_kind": "exact_fusion_api"
+        }
+      ],
+      "active_context": {
+        "active_component": "(Unsaved)",
+        "last_sketch": "syn_rotational_bodies_1772997891691_1__neck_or_top__sk",
+        "last_feature": "syn_rotational_bodies_1772997891691_1__neck_or_top__feat",
+        "timeline_count": 6
+      },
+      "source_kind": "exact_fusion_api"
+    },
+    "get_features": [
+      {
+        "name": "syn_rotational_bodies_1772997891691_1__radial_core__feat",
+        "type": "ExtrudeFeature",
+        "operation": "NewBodyFeatureOperation",
+        "body_count": 1
+      },
+      {
+        "name": "syn_rotational_bodies_1772997891691_1__neck_or_top__feat",
+        "type": "ExtrudeFeature",
+        "operation": "JoinFeatureOperation",
+        "body_count": 1
+      }
+    ],
+    "get_sketches": [
+      {
+        "name": "syn_rotational_bodies_1772997891691_1__radial_core__sk",
+        "type": "Sketch",
+        "profile_count": 1
+      },
+      {
+        "name": "syn_rotational_bodies_1772997891691_1__neck_or_top__sk",
+        "type": "Sketch",
+        "profile_count": 1
+      }
+    ],
+    "get_bodies": [
+      {
+        "id": "Body1#1",
+        "name": "Body1",
+        "volume": 3518.1910729387187,
+        "area": 1361.8804153311753,
+        "bbox": {
+          "type": "BoundingBox3D",
+          "max_point": {
+            "type": "Point3D",
+            "x": 8.5,
+            "y": 8.5,
+            "z": 19.0
+          },
+          "min_point": {
+            "type": "Point3D",
+            "x": -8.5,
+            "y": -8.5,
+            "z": 0.0
+          }
+        }
+      }
+    ],
+    "get_parts": [
+      {
+        "id": "Body1#1",
+        "name": "Body1",
+        "volume": 3518.1910729387187,
+        "area": 1361.8804153311753,
+        "bbox": {
+          "type": "BoundingBox3D",
+          "max_point": {
+            "type": "Point3D",
+            "x": 8.5,
+            "y": 8.5,
+            "z": 19.0
+          },
+          "min_point": {
+            "type": "Point3D",
+            "x": -8.5,
+            "y": -8.5,
+            "z": 0.0
+          }
+        }
+      }
+    ],
+    "get_body_bbox": {
+      "Body1#1": {
+        "x_min": -8.5,
+        "y_min": -8.5,
+        "z_min": 0.0,
+        "x_max": 8.5,
+        "y_max": 8.5,
+        "z_max": 19.0
+      }
+    },
+    "get_feature_bbox": {
+      "syn_rotational_bodies_1772997891691_1__radial_core__feat": {
+        "x_min": -8.5,
+        "y_min": -8.5,
+        "z_min": 0.0,
+        "x_max": 8.5,
+        "y_max": 8.5,
+        "z_max": 19.0
+      },
+      "syn_rotational_bodies_1772997891691_1__neck_or_top__feat": {
+        "x_min": -8.5,
+        "y_min": -8.5,
+        "z_min": 0.0,
+        "x_max": 8.5,
+        "y_max": 8.5,
+        "z_max": 19.0
+      }
+    },
+    "get_body_to_body_relations": [
+      {
+        "a": "radial_core",
+        "b": "neck_or_top",
+        "relation": "touches_estimate",
+        "intersects": false,
+        "touches": true,
+        "overlap_volume_approx": 0.0,
+        "gap_estimate": 0.0,
+        "source_kind": "heuristic_estimate"
+      }
+    ],
+    "get_step_relations": [
+      {
+        "a": "radial_core",
+        "b": "neck_or_top",
+        "relation": "touches_estimate",
+        "intersects": false,
+        "touches": true,
+        "overlap_volume_approx": 0.0,
+        "gap_estimate": 0.0,
+        "source_kind": "heuristic_estimate"
+      }
+    ],
+    "get_feature_to_body_relations": [
+      {
+        "feature_name": "syn_rotational_bodies_1772997891691_1__radial_core__feat",
+        "feature_type": "ExtrudeFeature",
+        "body_ids": [
+          "Body1#1"
+        ],
+        "source_kind": "exact_fusion_api"
+      },
+      {
+        "feature_name": "syn_rotational_bodies_1772997891691_1__neck_or_top__feat",
+        "feature_type": "ExtrudeFeature",
+        "body_ids": [
+          "Body1#1"
+        ],
+        "source_kind": "exact_fusion_api"
+      }
+    ],
+    "get_connected_components": [
+      [
+        "radial_core"
+      ]
+    ],
+    "get_overlaps": [],
+    "get_faces": {
+      "count": 5,
+      "per_body": {
+        "Body1#1": 5
+      },
+      "source_kind": "exact_fusion_api"
+    },
+    "get_edges": {
+      "count": 4,
+      "per_body": {
+        "Body1#1": 4
+      },
+      "source_kind": "exact_fusion_api"
+    },
+    "get_active_construction_context": {
+      "active_component": "(Unsaved)",
+      "last_sketch": "syn_rotational_bodies_1772997891691_1__neck_or_top__sk",
+      "last_feature": "syn_rotational_bodies_1772997891691_1__neck_or_top__feat",
+      "timeline_count": 6,
+      "last_executed_step_id": "radial_core",
+      "next_candidate_step_id": "neck_cap",
+      "grounded_step_ids": [
+        "radial_core"
+      ],
+      "floating_step_ids": []
+    },
+    "get_body_relations": [
+      {
+        "a": "radial_core",
+        "b": "neck_or_top",
+        "relation": "touches_estimate",
+        "intersects": false,
+        "touches": true,
+        "overlap_volume_approx": 0.0,
+        "gap_estimate": 0.0,
+        "source_kind": "heuristic_estimate"
+      }
+    ],
+    "executed_step_ids": [
+      "neck_or_top",
+      "radial_core"
+    ],
+    "introspection_sources": {
+      "list_tools": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "server tool registry"
+      },
+      "list_capabilities": {
+        "source_kind": "derived_exact",
+        "confidence": 0.85,
+        "note": "capability model reflection"
+      },
+      "get_model_state": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "model state summary"
+      },
+      "get_features": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "feature list"
+      },
+      "get_sketches": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "sketch list"
+      },
+      "get_bodies": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "body list"
+      },
+      "get_parts": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "alias of bodies"
+      },
+      "get_body_bbox": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "body bbox map"
+      },
+      "get_feature_bbox": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "feature bbox from runtime"
+      },
+      "get_body_to_body_relations": {
+        "source_kind": "heuristic_estimate",
+        "confidence": 0.55,
+        "note": "fallback from executed-step bbox relations"
+      },
+      "get_step_relations": {
+        "source_kind": "heuristic_estimate",
+        "confidence": 0.55,
+        "note": "fallback from step bbox relations"
+      },
+      "get_feature_to_body_relations": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "runtime feature-body mapping"
+      },
+      "get_connected_components": {
+        "source_kind": "derived_exact",
+        "confidence": 0.85,
+        "note": "connected components over runtime relation graph"
+      },
+      "get_overlaps": {
+        "source_kind": "heuristic_estimate",
+        "confidence": 0.55,
+        "note": "fallback from step bbox overlaps"
+      },
+      "get_faces": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "face summary"
+      },
+      "get_edges": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "edge summary"
+      },
+      "get_active_construction_context": {
+        "source_kind": "exact_fusion_api",
+        "confidence": 0.99,
+        "note": "active construction context"
+      },
+      "get_body_relations": {
+        "source_kind": "heuristic_estimate",
+        "confidence": 0.55,
+        "note": "fallback from executed-step bbox relations"
+      }
+    },
+    "state_signal_summary": {
+      "exact_queries": [
+        "get_active_construction_context",
+        "get_bodies",
+        "get_body_bbox",
+        "get_edges",
+        "get_faces",
+        "get_feature_bbox",
+        "get_feature_to_body_relations",
+        "get_features",
+        "get_model_state",
+        "get_parts",
+        "get_sketches",
+        "list_tools"
+      ],
+      "derived_queries": [
+        "get_connected_components",
+        "list_capabilities"
+      ],
+      "heuristic_queries": [
+        "get_body_relations",
+        "get_body_to_body_relations",
+        "get_overlaps",
+        "get_step_relations"
+      ]
+    },
+    "assembly_eval": {
+      "built_roles": [
+        "neck_or_top",
+        "radial_core"
+      ],
+      "required_roles_total": 3,
+      "required_roles_built": 2,
+      "required_built_ratio": 0.666667,
+      "disconnected_components": 0,
+      "floating_parts_count": 0,
+      "floating_step_ids": [],
+      "grounded_step_ids": [
+        "radial_core"
+      ],
+      "attachment_checks_total": 1,
+      "attachment_checks_passed": 1,
+      "attachment_plausibility": 1.0,
+      "unattached_pairs": [],
+      "step_relation_evidence_count": 1,
+      "unmet_dependencies": [],
+      "state_signal_confidence": 0.796667,
+      "assembly_score": 0.85
+    },
+    "snapshot_phase": "pre_step"
+  }
+}

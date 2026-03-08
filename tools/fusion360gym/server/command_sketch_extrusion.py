@@ -450,6 +450,236 @@ class CommandSketchExtrusion(CommandBase):
         except Exception as ex:
             return self.runner.return_failure(f"update_extrude failed: {ex}")
 
+    def _iter_collection(self, collection):
+        if collection is None:
+            return []
+        try:
+            return [item for item in collection]
+        except Exception:
+            pass
+        try:
+            count = int(getattr(collection, "count", 0) or 0)
+            return [collection.item(i) for i in range(count)]
+        except Exception:
+            return []
+
+    def _bbox3d_to_axes(self, bbox_data):
+        if not isinstance(bbox_data, dict):
+            return None
+        mn = bbox_data.get("min_point") if isinstance(bbox_data.get("min_point"), dict) else {}
+        mx = bbox_data.get("max_point") if isinstance(bbox_data.get("max_point"), dict) else {}
+        try:
+            return {
+                "x_min": float(mn.get("x", 0.0) or 0.0),
+                "y_min": float(mn.get("y", 0.0) or 0.0),
+                "z_min": float(mn.get("z", 0.0) or 0.0),
+                "x_max": float(mx.get("x", 0.0) or 0.0),
+                "y_max": float(mx.get("y", 0.0) or 0.0),
+                "z_max": float(mx.get("z", 0.0) or 0.0),
+            }
+        except Exception:
+            return None
+
+    def _axis_overlap(self, a0, a1, b0, b1):
+        lo = max(min(a0, a1), min(b0, b1))
+        hi = min(max(a0, a1), max(b0, b1))
+        return max(0.0, hi - lo)
+
+    def _bbox_gap(self, a, b):
+        gx = max(0.0, max(a["x_min"], b["x_min"]) - min(a["x_max"], b["x_max"]))
+        gy = max(0.0, max(a["y_min"], b["y_min"]) - min(a["y_max"], b["y_max"]))
+        gz = max(0.0, max(a["z_min"], b["z_min"]) - min(a["z_max"], b["z_max"]))
+        return max(gx, gy, gz)
+
+    def _bbox_intersection_volume(self, a, b):
+        ox = self._axis_overlap(a["x_min"], a["x_max"], b["x_min"], b["x_max"])
+        oy = self._axis_overlap(a["y_min"], a["y_max"], b["y_min"], b["y_max"])
+        oz = self._axis_overlap(a["z_min"], a["z_max"], b["z_min"], b["z_max"])
+        return (ox * oy * oz), ox, oy, oz
+
+    def _body_id(self, body, index):
+        name = str(getattr(body, "name", "") or f"Body_{index+1}")
+        return f"{name}#{index+1}"
+
+    def _collect_bodies(self):
+        comp = self.design_state.reconstruction.component
+        body_records = []
+        body_objects = {}
+        bodies = self._iter_collection(comp.bRepBodies)
+        for i, body in enumerate(bodies):
+            bid = self._body_id(body, i)
+            bbox = None
+            bbox_axes = None
+            try:
+                bbox = serialize.bounding_box3d(body.boundingBox)
+                bbox_axes = self._bbox3d_to_axes(bbox)
+            except Exception:
+                bbox = None
+            volume = 0.0
+            area = 0.0
+            try:
+                volume = float(getattr(body, "volume", 0.0) or 0.0)
+            except Exception:
+                volume = 0.0
+            try:
+                area = float(getattr(body, "area", 0.0) or 0.0)
+            except Exception:
+                area = 0.0
+            body_records.append(
+                {
+                    "id": bid,
+                    "name": str(getattr(body, "name", "") or f"Body_{i+1}"),
+                    "temp_id": str(getattr(body, "tempId", "") or ""),
+                    "revision_id": str(getattr(body, "revisionId", "") or ""),
+                    "volume": volume,
+                    "area": area,
+                    "bbox": bbox,
+                    "bbox_axes": bbox_axes,
+                }
+            )
+            body_objects[bid] = body
+        return body_records, body_objects
+
+    def _collect_feature_body_relations(self):
+        comp = self.design_state.reconstruction.component
+        body_records, body_objects = self._collect_bodies()
+        rev_to_body_id = {
+            str(getattr(body_objects.get(r.get("id")), "revisionId", "") or ""): str(r.get("id"))
+            for r in body_records
+        }
+        relations = []
+        for i in range(comp.features.extrudeFeatures.count):
+            feat = comp.features.extrudeFeatures.item(i)
+            fname = str(getattr(feat, "name", "") or f"Extrude_{i+1}")
+            feature_body_ids = []
+            for body in self._iter_collection(getattr(feat, "bodies", None)):
+                rid = str(getattr(body, "revisionId", "") or "")
+                mapped = rev_to_body_id.get(rid, "")
+                if mapped:
+                    feature_body_ids.append(mapped)
+            relations.append(
+                {
+                    "feature_name": fname,
+                    "feature_type": "ExtrudeFeature",
+                    "body_ids": sorted(set(feature_body_ids)),
+                    "source_kind": "exact_fusion_api",
+                }
+            )
+        return relations
+
+    def _collect_body_relations(self, contact_tol=None):
+        body_records, body_objects = self._collect_bodies()
+        ids = [str(b.get("id") or "") for b in body_records if str(b.get("id") or "")]
+        id_to_axes = {str(b.get("id")): b.get("bbox_axes") for b in body_records if isinstance(b.get("bbox_axes"), dict)}
+        if contact_tol is None:
+            tol = max(0.02, float(getattr(self.app, "pointTolerance", 0.01) or 0.01) * 10.0)
+        else:
+            tol = max(0.0, float(contact_tol))
+
+        interference_pairs = {}
+        try:
+            design = self.design_state.design or adsk.fusion.Design.cast(self.app.activeProduct)
+            if design is not None and len(ids) >= 2:
+                coll = adsk.core.ObjectCollection.create()
+                for bid in ids:
+                    coll.add(body_objects[bid])
+                input_data = design.createInterferenceInput(coll)
+                results = design.analyzeInterference(input_data)
+                rev_to_id = {
+                    str(getattr(body_objects[bid], "revisionId", "") or ""): bid
+                    for bid in ids
+                }
+                for res in self._iter_collection(results):
+                    one = getattr(res, "entityOne", None)
+                    two = getattr(res, "entityTwo", None)
+                    if one is None or two is None:
+                        continue
+                    a = rev_to_id.get(str(getattr(one, "revisionId", "") or ""), "")
+                    b = rev_to_id.get(str(getattr(two, "revisionId", "") or ""), "")
+                    if not a or not b or a == b:
+                        continue
+                    key = tuple(sorted((a, b)))
+                    inter_body = getattr(res, "interferenceBody", None)
+                    vol = 0.0
+                    try:
+                        vol = float(getattr(inter_body, "volume", 0.0) or 0.0) if inter_body is not None else 0.0
+                    except Exception:
+                        vol = 0.0
+                    interference_pairs[key] = max(float(interference_pairs.get(key, 0.0) or 0.0), vol)
+        except Exception:
+            interference_pairs = {}
+
+        relations = []
+        for i, a in enumerate(ids):
+            for b in ids[i + 1 :]:
+                a_axes = id_to_axes.get(a)
+                b_axes = id_to_axes.get(b)
+                if a_axes is None or b_axes is None:
+                    continue
+                key = tuple(sorted((a, b)))
+                exact_overlap = key in interference_pairs
+                overlap_volume_exact = float(interference_pairs.get(key, 0.0) or 0.0)
+                bbox_overlap_vol, ox, oy, oz = self._bbox_intersection_volume(a_axes, b_axes)
+                touches_estimate = False
+                relation = "separate"
+                source_kind = "heuristic_estimate"
+                if exact_overlap:
+                    relation = "intersects_exact"
+                    source_kind = "exact_fusion_api"
+                else:
+                    near_xy = ox > 0.0 and oy > 0.0 and abs(a_axes["z_max"] - b_axes["z_min"]) <= tol
+                    near_yz = oy > 0.0 and oz > 0.0 and abs(a_axes["x_max"] - b_axes["x_min"]) <= tol
+                    near_xz = ox > 0.0 and oz > 0.0 and abs(a_axes["y_max"] - b_axes["y_min"]) <= tol
+                    touches_estimate = bool(near_xy or near_yz or near_xz)
+                    if touches_estimate:
+                        relation = "contacts_estimate"
+                relations.append(
+                    {
+                        "a": a,
+                        "b": b,
+                        "relation": relation,
+                        "intersects": bool(exact_overlap),
+                        "touches": bool(touches_estimate),
+                        "overlap_volume": overlap_volume_exact,
+                        "bbox_overlap_volume_estimate": round(float(bbox_overlap_vol), 6),
+                        "gap_estimate": round(float(self._bbox_gap(a_axes, b_axes)), 6),
+                        "source_kind": source_kind,
+                    }
+                )
+        return body_records, relations
+
+    def _connected_components(self, nodes, relations):
+        graph = {n: [] for n in nodes}
+        for rel in relations:
+            if not isinstance(rel, dict):
+                continue
+            relation = str(rel.get("relation") or "").strip().lower()
+            if relation not in ("intersects_exact", "contacts_estimate"):
+                continue
+            a = str(rel.get("a") or "")
+            b = str(rel.get("b") or "")
+            if a in graph and b in graph:
+                graph[a].append(b)
+                graph[b].append(a)
+        visited = set()
+        comps = []
+        for n in nodes:
+            if n in visited:
+                continue
+            stack = [n]
+            comp = []
+            visited.add(n)
+            while stack:
+                cur = stack.pop()
+                comp.append(cur)
+                for nb in graph[cur]:
+                    if nb not in visited:
+                        visited.add(nb)
+                        stack.append(nb)
+            comps.append(sorted(comp))
+        comps.sort(key=lambda c: (-len(c), c))
+        return comps
+
     def list_features(self, data=None):
         """List sketch/extrude features for capability-aware inspection."""
         comp = self.design_state.reconstruction.component
@@ -479,3 +709,303 @@ class CommandSketchExtrusion(CommandBase):
             return self.runner.return_success({"bounding_box": serialize.bounding_box3d(bbox)})
         except Exception as ex:
             return self.runner.return_failure(f"query_bounding_box failed: {ex}")
+
+    def get_model_state(self, data=None):
+        comp = self.design_state.reconstruction.component
+        try:
+            body_records, _ = self._collect_bodies()
+            feature_rel = self._collect_feature_body_relations()
+            context = self.get_active_construction_context({})[2]
+            bbox = serialize.bounding_box3d(comp.boundingBox)
+            return self.runner.return_success(
+                {
+                    "component_name": str(getattr(comp, "name", "") or ""),
+                    "counts": {
+                        "sketches": int(comp.sketches.count),
+                        "extrude_features": int(comp.features.extrudeFeatures.count),
+                        "bodies": len(body_records),
+                    },
+                    "bounding_box": bbox,
+                    "feature_body_relations": feature_rel,
+                    "active_context": context.get("active_context", context) if isinstance(context, dict) else {},
+                    "source_kind": "exact_fusion_api",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_model_state failed: {ex}")
+
+    def get_features(self, data=None):
+        comp = self.design_state.reconstruction.component
+        features = []
+        try:
+            for i in range(comp.features.extrudeFeatures.count):
+                feat = comp.features.extrudeFeatures.item(i)
+                op_name = serialize.feature_operation(getattr(feat, "operation", None))
+                body_count = len(self._iter_collection(getattr(feat, "bodies", None)))
+                features.append(
+                    {
+                        "name": str(getattr(feat, "name", "") or f"Extrude_{i+1}"),
+                        "type": "ExtrudeFeature",
+                        "operation": op_name or "",
+                        "body_count": int(body_count),
+                    }
+                )
+            return self.runner.return_success({"features": features, "source_kind": "exact_fusion_api"})
+        except Exception as ex:
+            return self.runner.return_failure(f"get_features failed: {ex}")
+
+    def get_sketches(self, data=None):
+        comp = self.design_state.reconstruction.component
+        sketches = []
+        try:
+            for i in range(comp.sketches.count):
+                sk = comp.sketches.item(i)
+                profile_count = int(getattr(sk.profiles, "count", 0) or 0)
+                sketches.append(
+                    {
+                        "name": str(getattr(sk, "name", "") or f"Sketch_{i+1}"),
+                        "type": "Sketch",
+                        "profile_count": profile_count,
+                    }
+                )
+            return self.runner.return_success({"sketches": sketches, "source_kind": "exact_fusion_api"})
+        except Exception as ex:
+            return self.runner.return_failure(f"get_sketches failed: {ex}")
+
+    def get_bodies(self, data=None):
+        try:
+            body_records, _ = self._collect_bodies()
+            rows = []
+            for row in body_records:
+                rows.append(
+                    {
+                        "id": row.get("id"),
+                        "name": row.get("name"),
+                        "volume": row.get("volume"),
+                        "area": row.get("area"),
+                        "bbox": row.get("bbox"),
+                    }
+                )
+            return self.runner.return_success(
+                {
+                    "bodies": rows,
+                    "counts": {"bodies": len(rows)},
+                    "source_kind": "exact_fusion_api",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_bodies failed: {ex}")
+
+    def get_parts(self, data=None):
+        try:
+            code, msg, payload = self.get_bodies(data)
+            if code != 200:
+                return code, msg, payload
+            return self.runner.return_success(
+                {
+                    "parts": list((payload or {}).get("bodies", [])),
+                    "counts": dict((payload or {}).get("counts", {})),
+                    "source_kind": "exact_fusion_api",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_parts failed: {ex}")
+
+    def get_body_bbox(self, data=None):
+        data = data or {}
+        body_name = str(data.get("body_name") or "").strip().lower()
+        try:
+            body_records, _ = self._collect_bodies()
+            bbox_map = {}
+            for row in body_records:
+                rid = str(row.get("id") or "")
+                rname = str(row.get("name") or "").strip().lower()
+                if body_name and body_name not in (rid.lower(), rname):
+                    continue
+                if isinstance(row.get("bbox"), dict):
+                    bbox_map[rid] = row.get("bbox")
+            return self.runner.return_success({"body_bbox": bbox_map, "source_kind": "exact_fusion_api"})
+        except Exception as ex:
+            return self.runner.return_failure(f"get_body_bbox failed: {ex}")
+
+    def get_feature_bbox(self, data=None):
+        comp = self.design_state.reconstruction.component
+        try:
+            body_records, body_objects = self._collect_bodies()
+            rev_to_body_bbox = {}
+            for row in body_records:
+                rid = str(row.get("revision_id") or "")
+                if rid and isinstance(row.get("bbox"), dict):
+                    rev_to_body_bbox[rid] = row.get("bbox")
+
+            feature_bbox = {}
+            for i in range(comp.features.extrudeFeatures.count):
+                feat = comp.features.extrudeFeatures.item(i)
+                fname = str(getattr(feat, "name", "") or f"Extrude_{i+1}")
+                boxes = []
+                for body in self._iter_collection(getattr(feat, "bodies", None)):
+                    rid = str(getattr(body, "revisionId", "") or "")
+                    bb = rev_to_body_bbox.get(rid)
+                    if isinstance(bb, dict):
+                        boxes.append(bb)
+                if boxes:
+                    mins = [self._bbox3d_to_axes(b) for b in boxes]
+                    mins = [m for m in mins if isinstance(m, dict)]
+                    if mins:
+                        min_x = min(m["x_min"] for m in mins)
+                        min_y = min(m["y_min"] for m in mins)
+                        min_z = min(m["z_min"] for m in mins)
+                        max_x = max(m["x_max"] for m in mins)
+                        max_y = max(m["y_max"] for m in mins)
+                        max_z = max(m["z_max"] for m in mins)
+                        feature_bbox[fname] = {
+                            "type": "BoundingBox3D",
+                            "min_point": {"x": min_x, "y": min_y, "z": min_z},
+                            "max_point": {"x": max_x, "y": max_y, "z": max_z},
+                        }
+            return self.runner.return_success({"feature_bbox": feature_bbox, "source_kind": "exact_fusion_api"})
+        except Exception as ex:
+            return self.runner.return_failure(f"get_feature_bbox failed: {ex}")
+
+    def get_faces(self, data=None):
+        try:
+            body_records, body_objects = self._collect_bodies()
+            per_body = {}
+            total = 0
+            for row in body_records:
+                bid = str(row.get("id") or "")
+                count = 0
+                try:
+                    count = int(getattr(body_objects[bid].faces, "count", 0) or 0)
+                except Exception:
+                    count = 0
+                per_body[bid] = count
+                total += count
+            return self.runner.return_success(
+                {
+                    "faces": {
+                        "count": int(total),
+                        "per_body": per_body,
+                        "source_kind": "exact_fusion_api",
+                    }
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_faces failed: {ex}")
+
+    def get_edges(self, data=None):
+        try:
+            body_records, body_objects = self._collect_bodies()
+            per_body = {}
+            total = 0
+            for row in body_records:
+                bid = str(row.get("id") or "")
+                count = 0
+                try:
+                    count = int(getattr(body_objects[bid].edges, "count", 0) or 0)
+                except Exception:
+                    count = 0
+                per_body[bid] = count
+                total += count
+            return self.runner.return_success(
+                {
+                    "edges": {
+                        "count": int(total),
+                        "per_body": per_body,
+                        "source_kind": "exact_fusion_api",
+                    }
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_edges failed: {ex}")
+
+    def get_body_relations(self, data=None):
+        data = data or {}
+        try:
+            tol = data.get("contact_tolerance", None)
+            body_records, relations = self._collect_body_relations(contact_tol=tol)
+            return self.runner.return_success(
+                {
+                    "relations": relations,
+                    "body_count": len(body_records),
+                    "source_kind": "derived_exact",
+                    "notes": "intersections exact via analyzeInterference; contact uses bbox proximity estimate",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_body_relations failed: {ex}")
+
+    def get_feature_body_relations(self, data=None):
+        try:
+            rel = self._collect_feature_body_relations()
+            return self.runner.return_success({"relations": rel, "source_kind": "exact_fusion_api"})
+        except Exception as ex:
+            return self.runner.return_failure(f"get_feature_body_relations failed: {ex}")
+
+    def get_connected_components(self, data=None):
+        data = data or {}
+        try:
+            tol = data.get("contact_tolerance", None)
+            body_records, relations = self._collect_body_relations(contact_tol=tol)
+            ids = [str(b.get("id") or "") for b in body_records if str(b.get("id") or "")]
+            comps = self._connected_components(ids, relations)
+            exact_edges = sum(1 for r in relations if str(r.get("relation") or "") == "intersects_exact")
+            heuristic_edges = sum(1 for r in relations if str(r.get("relation") or "") == "contacts_estimate")
+            source_kind = "derived_exact" if exact_edges > 0 else "heuristic_estimate"
+            return self.runner.return_success(
+                {
+                    "components": comps,
+                    "edge_mix": {"exact": exact_edges, "heuristic": heuristic_edges},
+                    "source_kind": source_kind,
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_connected_components failed: {ex}")
+
+    def get_overlaps(self, data=None):
+        data = data or {}
+        try:
+            tol = data.get("contact_tolerance", None)
+            _, relations = self._collect_body_relations(contact_tol=tol)
+            overlaps = []
+            for rel in relations:
+                relation = str(rel.get("relation") or "")
+                if relation in ("intersects_exact", "contacts_estimate"):
+                    overlaps.append(dict(rel))
+            return self.runner.return_success(
+                {
+                    "overlaps": overlaps,
+                    "source_kind": "derived_exact",
+                    "notes": "exact intersects + estimated contacts",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_overlaps failed: {ex}")
+
+    def get_active_construction_context(self, data=None):
+        comp = self.design_state.reconstruction.component
+        try:
+            last_sketch = ""
+            if comp.sketches.count > 0:
+                last_sketch = str(getattr(comp.sketches.item(comp.sketches.count - 1), "name", "") or "")
+            last_feature = ""
+            if comp.features.extrudeFeatures.count > 0:
+                last_feature = str(getattr(comp.features.extrudeFeatures.item(comp.features.extrudeFeatures.count - 1), "name", "") or "")
+            timeline_count = 0
+            try:
+                timeline_count = int(getattr(self.design_state.design.timeline, "count", 0) or 0)
+            except Exception:
+                timeline_count = 0
+            return self.runner.return_success(
+                {
+                    "active_context": {
+                        "active_component": str(getattr(comp, "name", "") or ""),
+                        "last_sketch": last_sketch,
+                        "last_feature": last_feature,
+                        "timeline_count": timeline_count,
+                    },
+                    "source_kind": "exact_fusion_api",
+                }
+            )
+        except Exception as ex:
+            return self.runner.return_failure(f"get_active_construction_context failed: {ex}")

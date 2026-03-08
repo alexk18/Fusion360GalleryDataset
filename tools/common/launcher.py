@@ -54,10 +54,26 @@ class Launcher():
 
     def find_fusion_mac(self):
         """Find the Fusion app on mac"""
-        # Shortcut location that links to the latest version
         user_path = Path(os.path.expanduser("~"))
-        fusion_app = user_path / "Library/Application Support/Autodesk/webdeploy/production/Autodesk Fusion 360.app"
-        return fusion_app
+        env_path = os.environ.get("FUSION360_APP_PATH", "").strip()
+        candidates = []
+        if env_path:
+            candidates.append(Path(env_path))
+        candidates.extend(
+            [
+                # Legacy webdeploy shortcut location.
+                user_path / "Library/Application Support/Autodesk/webdeploy/production/Autodesk Fusion 360.app",
+                # Newer mac installers often place Fusion here.
+                user_path / "Applications/Autodesk Fusion.app",
+                Path("/Applications/Autodesk Fusion.app"),
+                Path("/Applications/Autodesk Fusion 360.app"),
+            ]
+        )
+        for app in candidates:
+            if app.exists():
+                return app
+        # Return the first candidate for clearer diagnostics.
+        return candidates[0] if candidates else None
 
     def find_fusion_windows(self):
         """Find the Fusion app

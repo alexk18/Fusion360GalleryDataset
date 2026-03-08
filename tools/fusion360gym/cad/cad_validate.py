@@ -194,7 +194,21 @@ def _validate_step(
             result.add_warning(f"Step {step_id}: distance clamped to {MAX_DISTANCE}")
 
     profile = step.get("profile") or {}
-    if prim in ("rect_extrude", "circle_extrude", "poly_extrude", "wedge_extrude", "cut_extrude"):
+    expected_profile_type = None
+    if prim in ("rect_extrude", "cut_extrude"):
+        expected_profile_type = "rect"
+    elif prim == "circle_extrude":
+        expected_profile_type = "circle"
+    elif prim in ("poly_extrude", "wedge_extrude"):
+        expected_profile_type = "poly"
+
+    if expected_profile_type is not None:
+        profile_type = str(profile.get("type") or "").strip().lower() or expected_profile_type
+        if profile_type != expected_profile_type:
+            result.add_error(
+                f"Step {step_id}: primitive '{prim}' requires profile.type='{expected_profile_type}', got '{profile_type}'"
+            )
+            return
         _validate_profile(step_id, profile, result, capabilities)
 
     if prim == "fillet":

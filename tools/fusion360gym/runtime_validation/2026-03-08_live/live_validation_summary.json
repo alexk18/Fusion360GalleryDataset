@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-03-08T20:17:10+0100",
+  "query_report": "tools/fusion360gym/runtime_validation/2026-03-08_live/live_query_validation.json",
+  "smoke_report": "tools/fusion360gym/runtime_validation/2026-03-08_live/live_smoke_benchmark.json",
+  "full_report": "tools/fusion360gym/runtime_validation/2026-03-08_live/live_full_benchmark.json",
+  "routing_report": "tools/fusion360gym/runtime_validation/2026-03-08_live/live_benchmark_routing.json",
+  "smoke_metrics": {
+    "build_success_rate": 0.333333,
+    "blocked_honesty_rate": 1.0,
+    "disconnected_parts_metric": 0.666667,
+    "floating_parts_metric": 0.0,
+    "primary_role_completion": 0.555556,
+    "silhouette_plausibility_proxy": 0.755556,
+    "average_iterations_to_stop": 6.0,
+    "risky_detail_execution_rate": 0.0
+  },
+  "full_metrics": {
+    "build_success_rate": 0.3,
+    "blocked_honesty_rate": 1.0,
+    "disconnected_parts_metric": 1.0,
+    "floating_parts_metric": 0.0,
+    "primary_role_completion": 0.7,
+    "silhouette_plausibility_proxy": 0.798333,
+    "average_iterations_to_stop": 7.7,
+    "risky_detail_execution_rate": 0.0
+  },
+  "smoke_case_count": 4,
+  "full_case_count": 12
+}

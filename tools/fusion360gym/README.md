@@ -312,9 +312,61 @@ Various utility calls to interact with Fusion 360.
 ### Implementation
 See [client/fusion360gym_client.py](client/fusion360gym_client.py) for the implementation of the calls documented above.
 
+## Iterative Create Geometry Layer
+
+Create-mode CAD execution now runs as an iterative loop that inspects runtime state after each fragment:
+
+`structural spec -> candidate DSL -> execute fragment -> query Fusion state -> update relational assembly -> continue/stop`
+
+Runtime query surface now includes:
+- `get_model_state`
+- `get_features`, `get_sketches`
+- `get_bodies`, `get_parts`
+- `get_body_bbox`, `get_feature_bbox`
+- `get_faces`, `get_edges`
+- `get_body_relations`, `get_feature_body_relations`
+- `get_connected_components`, `get_overlaps`
+- `get_active_construction_context`
+
+Introspection signals are confidence-labeled:
+- `exact_fusion_api`
+- `derived_exact`
+- `heuristic_estimate`
+
+Heuristic values are explicitly marked and are not reported as exact geometry.
+
+## Create Benchmark
+
+Use `cad/cad_benchmark.py` to run a representative create-mode suite and aggregate quality metrics.
+
+Example:
+
+```python
+from cad.cad_benchmark import run_create_benchmark, default_create_benchmark_cases
+
+report = run_create_benchmark(
+    client,
+    cases=default_create_benchmark_cases(),
+    candidate_count=3,
+    max_iterations=32,
+)
+print(report["metrics"])
+```
+
+Per-case outputs include prompt id, family/subtype routing, `exact|lowpoly_approx|blocked`, success/failure, iterations, role completion, disconnected/floating counts, risky-step stats, trace summary, and optional screenshot path.
+
+Main quality aggregates:
+- `build_success_rate`
+- `blocked_honesty_rate`
+- `disconnected_parts_metric`
+- `floating_parts_metric`
+- `primary_role_completion`
+- `silhouette_plausibility_proxy`
+- `average_iterations_to_stop`
+- `risky_detail_execution_rate`
+
 
 
 ## Test
 See the [test directory](test/) for test coverage and additional usage examples.
-
 

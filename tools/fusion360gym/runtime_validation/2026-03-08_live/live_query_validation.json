@@ -1,0 +1,930 @@
+{
+  "generated_at": "2026-03-08T20:15:22+0100",
+  "endpoint": "http://127.0.0.1:8080",
+  "queries": [
+    {
+      "command": "ping",
+      "runner": "direct_client",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "status",
+          "ok",
+          "code",
+          "trace_id",
+          "message"
+        ]
+      }
+    },
+    {
+      "command": "list_capabilities",
+      "runner": "backend",
+      "worked": true,
+      "http_status": null,
+      "source_kind": "",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "capabilities"
+        ]
+      }
+    },
+    {
+      "command": "list_tools",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "tools"
+        ],
+        "tools_len": 44,
+        "tools_head": [
+          {
+            "name": "add_arc",
+            "category": "sketch",
+            "description": "Add arc to sketch",
+            "required_fields": [
+              "angle",
+              "pt1",
+              "pt2",
+              "sketch_name"
+            ],
+            "optional_fields": [
+              "transform"
+            ]
+          },
+          {
+            "name": "add_circle",
+            "category": "sketch",
+            "description": "Add circle to sketch",
+            "required_fields": [
+              "pt",
+              "radius",
+              "sketch_name"
+            ],
+            "optional_fields": [
+              "transform"
+            ]
+          },
+          {
+            "name": "add_extrude",
+            "category": "feature",
+            "description": "Extrude sketch profile",
+            "required_fields": [
+              "distance",
+              "operation",
+              "profile_id",
+              "sketch_name"
+            ],
+            "optional_fields": [
+              "feature_name"
+            ]
+          },
+          {
+            "name": "add_extrude_by_target_face",
+            "category": "target",
+            "description": "Extrude between two target faces",
+            "required_fields": [
+              "end_face",
+              "operation",
+              "start_face"
+            ],
+            "optional_fields": []
+          },
+          {
+            "name": "add_extrudes_by_target_face",
+            "category": "target",
+            "description": "Run batch face extrusions",
+            "required_fields": [
+              "actions"
+            ],
+            "optional_fields": [
+              "revert"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_model_state",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "component_name",
+          "counts",
+          "bounding_box",
+          "feature_body_relations",
+          "active_context",
+          "source_kind"
+        ],
+        "counts": {
+          "sketches": 11,
+          "extrude_features": 10,
+          "bodies": 8
+        },
+        "source_kind": "exact_fusion_api",
+        "active_context": {
+          "active_component": "(Unsaved)",
+          "last_sketch": "lowpoly_tank_build__hull_service_cut__sk",
+          "last_feature": "lowpoly_tank_build__rear_right_wheel__feat",
+          "timeline_count": 31
+        }
+      }
+    },
+    {
+      "command": "get_features",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "features",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "features_len": 10,
+        "features_head": [
+          {
+            "name": "lowpoly_tank_build__lower_hull__feat",
+            "type": "ExtrudeFeature",
+            "operation": "NewBodyFeatureOperation",
+            "body_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__upper_hull__feat",
+            "type": "ExtrudeFeature",
+            "operation": "JoinFeatureOperation",
+            "body_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__turret__feat",
+            "type": "ExtrudeFeature",
+            "operation": "JoinFeatureOperation",
+            "body_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__gun__feat",
+            "type": "ExtrudeFeature",
+            "operation": "NewBodyFeatureOperation",
+            "body_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__left_track_module__feat",
+            "type": "ExtrudeFeature",
+            "operation": "NewBodyFeatureOperation",
+            "body_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_sketches",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "sketches",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "sketches_len": 11,
+        "sketches_head": [
+          {
+            "name": "lowpoly_tank_build__lower_hull__sk",
+            "type": "Sketch",
+            "profile_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__upper_hull__sk",
+            "type": "Sketch",
+            "profile_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__turret__sk",
+            "type": "Sketch",
+            "profile_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__gun__sk",
+            "type": "Sketch",
+            "profile_count": 1
+          },
+          {
+            "name": "lowpoly_tank_build__left_track_module__sk",
+            "type": "Sketch",
+            "profile_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_bodies",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "bodies",
+          "counts",
+          "source_kind"
+        ],
+        "counts": {
+          "bodies": 8
+        },
+        "source_kind": "exact_fusion_api",
+        "bodies_len": 8,
+        "bodies_head": [
+          {
+            "id": "Body1#1",
+            "name": "Body1",
+            "volume": 416.0,
+            "area": 448.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": 2.0,
+                "z": 26.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": -2.0,
+                "z": 0.0
+              }
+            }
+          },
+          {
+            "id": "Body2#2",
+            "name": "Body2",
+            "volume": 376.99111843075895,
+            "area": 402.1238596594935,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 42.0,
+                "y": 4.0,
+                "z": -21.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": 12.0,
+                "y": 0.0,
+                "z": -25.0
+              }
+            }
+          },
+          {
+            "id": "Body3#3",
+            "name": "Body3",
+            "volume": 64.0,
+            "area": 96.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": -8.0,
+                "z": 2.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": -12.0,
+                "z": -2.0
+              }
+            }
+          },
+          {
+            "id": "Body4#4",
+            "name": "Body4",
+            "volume": 64.0,
+            "area": 96.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": 16.0,
+                "z": 2.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": 12.0,
+                "z": -2.0
+              }
+            }
+          },
+          {
+            "id": "Body5#5",
+            "name": "Body5",
+            "volume": 25.13274122871943,
+            "area": 50.26548245743669,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 20.0,
+                "y": 6.0,
+                "z": 12.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": 18.0,
+                "y": 2.0,
+                "z": 8.0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_parts",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "parts",
+          "counts",
+          "source_kind"
+        ],
+        "counts": {
+          "bodies": 8
+        },
+        "source_kind": "exact_fusion_api",
+        "parts_len": 8,
+        "parts_head": [
+          {
+            "id": "Body1#1",
+            "name": "Body1",
+            "volume": 416.0,
+            "area": 448.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": 2.0,
+                "z": 26.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": -2.0,
+                "z": 0.0
+              }
+            }
+          },
+          {
+            "id": "Body2#2",
+            "name": "Body2",
+            "volume": 376.99111843075895,
+            "area": 402.1238596594935,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 42.0,
+                "y": 4.0,
+                "z": -21.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": 12.0,
+                "y": 0.0,
+                "z": -25.0
+              }
+            }
+          },
+          {
+            "id": "Body3#3",
+            "name": "Body3",
+            "volume": 64.0,
+            "area": 96.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": -8.0,
+                "z": 2.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": -12.0,
+                "z": -2.0
+              }
+            }
+          },
+          {
+            "id": "Body4#4",
+            "name": "Body4",
+            "volume": 64.0,
+            "area": 96.0,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 2.0,
+                "y": 16.0,
+                "z": 2.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": -2.0,
+                "y": 12.0,
+                "z": -2.0
+              }
+            }
+          },
+          {
+            "id": "Body5#5",
+            "name": "Body5",
+            "volume": 25.13274122871943,
+            "area": 50.26548245743669,
+            "bbox": {
+              "type": "BoundingBox3D",
+              "max_point": {
+                "type": "Point3D",
+                "x": 20.0,
+                "y": 6.0,
+                "z": 12.0
+              },
+              "min_point": {
+                "type": "Point3D",
+                "x": 18.0,
+                "y": 2.0,
+                "z": 8.0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_body_bbox",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "body_bbox",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "body_bbox": {
+          "Body1#1": {
+            "type": "BoundingBox3D",
+            "max_point": {
+              "type": "Point3D",
+              "x": 2.0,
+              "y": 2.0,
+              "z": 26.0
+            },
+            "min_point": {
+              "type": "Point3D",
+              "x": -2.0,
+              "y": -2.0,
+              "z": 0.0
+            }
+          },
+          "Body2#2": {
+            "type": "BoundingBox3D",
+            "max_point": {
+              "type": "Point3D",
+              "x": 42.0,
+              "y": 4.0,
+              "z": -21.0
+            },
+            "min_point": {
+              "type": "Point3D",
+              "x": 12.0,
+              "y": 0.0,
+              "z": -25.0
+            }
+          },
+          "Body3#3": {
+            "type": "BoundingBox3D",
+            "max_point": {
+              "type": "Point3D",
+              "x": 2.0,
+              "y": -8.0,
+              "z": 2.0
+            },
+            "min_point": {
+              "type": "Point3D",
+              "x": -2.0,
+              "y": -12.0,
+              "z": -2.0
+            }
+          },
+          "Body4#4": {
+            "type": "BoundingBox3D",
+            "max_point": {
+              "type": "Point3D",
+              "x": 2.0,
+              "y": 16.0,
+              "z": 2.0
+            },
+            "min_point": {
+              "type": "Point3D",
+              "x": -2.0,
+              "y": 12.0,
+              "z": -2.0
+            }
+          },
+          "Body5#5": {
+            "type": "BoundingBox3D",
+            "max_point": {
+              "type": "Point3D",
+              "x": 20.0,
+              "y": 6.0,
+              "z": 12.0
+            },
+            "min_point": {
+              "type": "Point3D",
+              "x": 18.0,
+              "y": 2.0,
+              "z": 8.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "command": "get_feature_bbox",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "feature_bbox",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "feature_bbox": {
+          "lowpoly_tank_build__lower_hull__feat": {
+            "type": "BoundingBox3D",
+            "min_point": {
+              "x": -2.0,
+              "y": -2.0,
+              "z": 0.0
+            },
+            "max_point": {
+              "x": 2.0,
+              "y": 2.0,
+              "z": 26.0
+            }
+          },
+          "lowpoly_tank_build__upper_hull__feat": {
+            "type": "BoundingBox3D",
+            "min_point": {
+              "x": -2.0,
+              "y": -2.0,
+              "z": 0.0
+            },
+            "max_point": {
+              "x": 2.0,
+              "y": 2.0,
+              "z": 26.0
+            }
+          },
+          "lowpoly_tank_build__turret__feat": {
+            "type": "BoundingBox3D",
+            "min_point": {
+              "x": -2.0,
+              "y": -2.0,
+              "z": 0.0
+            },
+            "max_point": {
+              "x": 2.0,
+              "y": 2.0,
+              "z": 26.0
+            }
+          },
+          "lowpoly_tank_build__gun__feat": {
+            "type": "BoundingBox3D",
+            "min_point": {
+              "x": 12.0,
+              "y": 0.0,
+              "z": -25.0
+            },
+            "max_point": {
+              "x": 42.0,
+              "y": 4.0,
+              "z": -21.0
+            }
+          },
+          "lowpoly_tank_build__left_track_module__feat": {
+            "type": "BoundingBox3D",
+            "min_point": {
+              "x": -2.0,
+              "y": -12.0,
+              "z": -2.0
+            },
+            "max_point": {
+              "x": 2.0,
+              "y": -8.0,
+              "z": 2.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "command": "get_connected_components",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "heuristic_estimate",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "components",
+          "edge_mix",
+          "source_kind"
+        ],
+        "edge_mix": {
+          "exact": 0,
+          "heuristic": 0
+        },
+        "source_kind": "heuristic_estimate",
+        "components_len": 8,
+        "components_head": [
+          [
+            "Body1#1"
+          ],
+          [
+            "Body2#2"
+          ],
+          [
+            "Body3#3"
+          ],
+          [
+            "Body4#4"
+          ],
+          [
+            "Body5#5"
+          ]
+        ]
+      }
+    },
+    {
+      "command": "get_overlaps",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "derived_exact",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "overlaps",
+          "source_kind",
+          "notes"
+        ],
+        "source_kind": "derived_exact",
+        "notes": "exact intersects + estimated contacts",
+        "overlaps_len": 0,
+        "overlaps_head": []
+      }
+    },
+    {
+      "command": "get_active_construction_context",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "active_context",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "active_context": {
+          "active_component": "(Unsaved)",
+          "last_sketch": "lowpoly_tank_build__hull_service_cut__sk",
+          "last_feature": "lowpoly_tank_build__rear_right_wheel__feat",
+          "timeline_count": 31
+        }
+      }
+    },
+    {
+      "command": "get_faces",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "faces"
+        ],
+        "faces": {
+          "count": 33,
+          "per_body": {
+            "Body1#1": 6,
+            "Body2#2": 3,
+            "Body3#3": 6,
+            "Body4#4": 6,
+            "Body5#5": 3,
+            "Body6#6": 3,
+            "Body7#7": 3,
+            "Body8#8": 3
+          },
+          "source_kind": "exact_fusion_api"
+        }
+      }
+    },
+    {
+      "command": "get_edges",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "edges"
+        ],
+        "edges": {
+          "count": 46,
+          "per_body": {
+            "Body1#1": 12,
+            "Body2#2": 2,
+            "Body3#3": 12,
+            "Body4#4": 12,
+            "Body5#5": 2,
+            "Body6#6": 2,
+            "Body7#7": 2,
+            "Body8#8": 2
+          },
+          "source_kind": "exact_fusion_api"
+        }
+      }
+    },
+    {
+      "command": "get_body_relations",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "derived_exact",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "relations",
+          "body_count",
+          "source_kind",
+          "notes"
+        ],
+        "source_kind": "derived_exact",
+        "notes": "intersections exact via analyzeInterference; contact uses bbox proximity estimate",
+        "relations_len": 28,
+        "relations_head": [
+          {
+            "a": "Body1#1",
+            "b": "Body2#2",
+            "relation": "separate",
+            "intersects": false,
+            "touches": false,
+            "overlap_volume": 0.0,
+            "bbox_overlap_volume_estimate": 0.0,
+            "gap_estimate": 21.0,
+            "source_kind": "heuristic_estimate"
+          },
+          {
+            "a": "Body1#1",
+            "b": "Body3#3",
+            "relation": "separate",
+            "intersects": false,
+            "touches": false,
+            "overlap_volume": 0.0,
+            "bbox_overlap_volume_estimate": 0.0,
+            "gap_estimate": 6.0,
+            "source_kind": "heuristic_estimate"
+          },
+          {
+            "a": "Body1#1",
+            "b": "Body4#4",
+            "relation": "separate",
+            "intersects": false,
+            "touches": false,
+            "overlap_volume": 0.0,
+            "bbox_overlap_volume_estimate": 0.0,
+            "gap_estimate": 10.0,
+            "source_kind": "heuristic_estimate"
+          },
+          {
+            "a": "Body1#1",
+            "b": "Body5#5",
+            "relation": "separate",
+            "intersects": false,
+            "touches": false,
+            "overlap_volume": 0.0,
+            "bbox_overlap_volume_estimate": 0.0,
+            "gap_estimate": 16.0,
+            "source_kind": "heuristic_estimate"
+          },
+          {
+            "a": "Body1#1",
+            "b": "Body6#6",
+            "relation": "separate",
+            "intersects": false,
+            "touches": false,
+            "overlap_volume": 0.0,
+            "bbox_overlap_volume_estimate": 0.0,
+            "gap_estimate": 16.0,
+            "source_kind": "heuristic_estimate"
+          }
+        ]
+      }
+    },
+    {
+      "command": "get_feature_body_relations",
+      "runner": "backend",
+      "worked": true,
+      "http_status": 200,
+      "source_kind": "exact_fusion_api",
+      "error": "",
+      "response_preview": {
+        "keys": [
+          "relations",
+          "source_kind"
+        ],
+        "source_kind": "exact_fusion_api",
+        "relations_len": 10,
+        "relations_head": [
+          {
+            "feature_name": "lowpoly_tank_build__lower_hull__feat",
+            "feature_type": "ExtrudeFeature",
+            "body_ids": [
+              "Body1#1"
+            ],
+            "source_kind": "exact_fusion_api"
+          },
+          {
+            "feature_name": "lowpoly_tank_build__upper_hull__feat",
+            "feature_type": "ExtrudeFeature",
+            "body_ids": [
+              "Body1#1"
+            ],
+            "source_kind": "exact_fusion_api"
+          },
+          {
+            "feature_name": "lowpoly_tank_build__turret__feat",
+            "feature_type": "ExtrudeFeature",
+            "body_ids": [
+              "Body1#1"
+            ],
+            "source_kind": "exact_fusion_api"
+          },
+          {
+            "feature_name": "lowpoly_tank_build__gun__feat",
+            "feature_type": "ExtrudeFeature",
+            "body_ids": [
+              "Body2#2"
+            ],
+            "source_kind": "exact_fusion_api"
+          },
+          {
+            "feature_name": "lowpoly_tank_build__left_track_module__feat",
+            "feature_type": "ExtrudeFeature",
+            "body_ids": [
+              "Body3#3"
+            ],
+            "source_kind": "exact_fusion_api"
+          }
+        ]
+      }
+    }
+  ]
+}

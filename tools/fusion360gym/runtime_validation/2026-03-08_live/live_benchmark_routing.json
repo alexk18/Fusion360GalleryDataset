@@ -1,0 +1,110 @@
+[
+  {
+    "input_id": "tank_lowpoly",
+    "prompt": "Build a lowpoly tank",
+    "subtype": "tracked_turret_vehicle",
+    "expected_family": "lowpoly_hard_surface_vehicle",
+    "actual_family": "lowpoly_hard_surface_vehicle",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "armored_vehicle",
+    "prompt": "Build an armored vehicle",
+    "subtype": "armored_vehicle",
+    "expected_family": "lowpoly_hard_surface_vehicle",
+    "actual_family": "lowpoly_hard_surface_vehicle",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "military_truck_simple",
+    "prompt": "Build a simple military truck",
+    "subtype": "truck",
+    "expected_family": "lowpoly_hard_surface_vehicle",
+    "actual_family": "lowpoly_hard_surface_vehicle",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "bedside_table",
+    "prompt": "Build a bedside table",
+    "subtype": "boxy_furniture",
+    "expected_family": "furniture_boxy_panel",
+    "actual_family": "furniture_boxy_panel",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "chair_straight_frame",
+    "prompt": "Build a simple chair with straight frame",
+    "subtype": "chair_frame",
+    "expected_family": "furniture_boxy_panel",
+    "actual_family": "furniture_boxy_panel",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "bed_headboard",
+    "prompt": "Build a bed with headboard",
+    "subtype": "bed_frame",
+    "expected_family": "furniture_boxy_panel",
+    "actual_family": "unsupported_smooth_freeform",
+    "routed_ok": false,
+    "outcome_target": "blocked"
+  },
+  {
+    "input_id": "airplane_lowpoly",
+    "prompt": "Build a lowpoly airplane",
+    "subtype": "airplane",
+    "expected_family": "lowpoly_hard_surface_vehicle",
+    "actual_family": "lowpoly_hard_surface_vehicle",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "boat_lowpoly",
+    "prompt": "Build a lowpoly boat",
+    "subtype": "boat",
+    "expected_family": "lowpoly_hard_surface_vehicle",
+    "actual_family": "lowpoly_hard_surface_vehicle",
+    "routed_ok": true,
+    "outcome_target": "exact"
+  },
+  {
+    "input_id": "bottle",
+    "prompt": "Build a bottle",
+    "subtype": "rotational_container",
+    "expected_family": "rotational_bodies",
+    "actual_family": "rotational_bodies",
+    "routed_ok": true,
+    "outcome_target": "lowpoly_approx"
+  },
+  {
+    "input_id": "vase",
+    "prompt": "Build a vase",
+    "subtype": "rotational_container",
+    "expected_family": "rotational_bodies",
+    "actual_family": "rotational_bodies",
+    "routed_ok": true,
+    "outcome_target": "lowpoly_approx"
+  },
+  {
+    "input_id": "mug",
+    "prompt": "Build a mug",
+    "subtype": "rotational_container",
+    "expected_family": "rotational_bodies",
+    "actual_family": "rotational_bodies",
+    "routed_ok": true,
+    "outcome_target": "lowpoly_approx"
+  },
+  {
+    "input_id": "smooth_human_face_sculpture",
+    "prompt": "Build a smooth human face sculpture",
+    "subtype": "organic_freeform",
+    "expected_family": "unsupported_smooth_freeform",
+    "actual_family": "unsupported_smooth_freeform",
+    "routed_ok": true,
+    "outcome_target": "blocked"
+  }
+]

@@ -423,6 +423,60 @@ class Fusion360GymClient():
         """List sketches/extrudes currently present in reconstruction component."""
         return self.send_command("list_features", data={})
 
+    def get_model_state(self):
+        return self.send_command("get_model_state", data={})
+
+    def get_features(self):
+        return self.send_command("get_features", data={})
+
+    def get_sketches(self):
+        return self.send_command("get_sketches", data={})
+
+    def get_bodies(self):
+        return self.send_command("get_bodies", data={})
+
+    def get_parts(self):
+        return self.send_command("get_parts", data={})
+
+    def get_body_bbox(self, body_name=None):
+        payload = {}
+        if isinstance(body_name, str) and body_name.strip():
+            payload["body_name"] = body_name.strip()
+        return self.send_command("get_body_bbox", data=payload)
+
+    def get_feature_bbox(self):
+        return self.send_command("get_feature_bbox", data={})
+
+    def get_faces(self):
+        return self.send_command("get_faces", data={})
+
+    def get_edges(self):
+        return self.send_command("get_edges", data={})
+
+    def get_body_relations(self, contact_tolerance=None):
+        payload = {}
+        if isinstance(contact_tolerance, (int, float)):
+            payload["contact_tolerance"] = float(contact_tolerance)
+        return self.send_command("get_body_relations", data=payload)
+
+    def get_feature_body_relations(self):
+        return self.send_command("get_feature_body_relations", data={})
+
+    def get_connected_components(self, contact_tolerance=None):
+        payload = {}
+        if isinstance(contact_tolerance, (int, float)):
+            payload["contact_tolerance"] = float(contact_tolerance)
+        return self.send_command("get_connected_components", data=payload)
+
+    def get_overlaps(self, contact_tolerance=None):
+        payload = {}
+        if isinstance(contact_tolerance, (int, float)):
+            payload["contact_tolerance"] = float(contact_tolerance)
+        return self.send_command("get_overlaps", data=payload)
+
+    def get_active_construction_context(self):
+        return self.send_command("get_active_construction_context", data={})
+
     def query_bounding_box(self):
         """Query current reconstruction bounding box."""
         return self.send_command("query_bounding_box", data={})
@@ -938,6 +992,10 @@ class Fusion360GymClient():
     def ping(self):
         """Ping for debugging"""
         return self.send_command("ping")
+
+    def list_tools(self):
+        """List available server tools and their input contracts."""
+        return self.send_command("list_tools")
 
     def refresh(self):
         """Refresh the active viewport"""

@@ -285,6 +285,115 @@ class CadExecutor:
         self._last_step_error = ""
         self._last_step_backend_path: List[str] = []
 
+    def _execute_controlled_recreate_suffix(
+        self,
+        compiled_list: List[CompiledStep],
+        start_index: int,
+        steps_ok_so_far: int,
+        steps_total: int,
+        session: str,
+        decision_reason: str,
+    ) -> ExecutionResult:
+        suffix = compiled_list[start_index:]
+        start_step = compiled_list[start_index]
+        start_step_id = start_step.step_id
+        self._record_trace(
+            step_id=start_step_id,
+            primitive=start_step.primitive,
+            action="recreate-required",
+            backend_path=["controlled_recreate_suffix"],
+            reason=f"{decision_reason}; suffix_steps={len(suffix)}",
+        )
+
+        blocked_features: List[str] = []
+        for cs in suffix:
+            feature_name = _get_feature_name_from_compiled_step(cs)
+            if not feature_name:
+                continue
+            found, find_err, _find_path = self._feature_lookup(feature_name)
+            if find_err:
+                self._record_trace(
+                    step_id=cs.step_id,
+                    primitive=cs.primitive,
+                    action="failed",
+                    backend_path=["controlled_recreate_suffix", "find_entity_by_name"],
+                    reason=find_err,
+                )
+                return ExecutionResult(
+                    success=False,
+                    steps_ok=steps_ok_so_far,
+                    steps_total=steps_total,
+                    message=f"controlled recreate failed during lookup: {find_err}",
+                    registry=dict(self.registry),
+                    trace=list(self.trace),
+                )
+            if found:
+                blocked_features.append(feature_name)
+
+        if blocked_features:
+            reason = (
+                "controlled recreate blocked: existing suffix features require delete/suppress path, "
+                "which is unavailable in current backend; existing="
+                + ", ".join(blocked_features[:8])
+            )
+            self._record_trace(
+                step_id=start_step_id,
+                primitive=start_step.primitive,
+                action="failed",
+                backend_path=["controlled_recreate_suffix"],
+                reason=reason,
+            )
+            return ExecutionResult(
+                success=False,
+                steps_ok=steps_ok_so_far,
+                steps_total=steps_total,
+                message=reason,
+                registry=dict(self.registry),
+                trace=list(self.trace),
+            )
+
+        suffix_ok = 0
+        for cs in suffix:
+            ok = self.execute_compiled_step(cs, session)
+            if not ok:
+                reason = self._last_step_error or "controlled recreate suffix step failed"
+                self._record_trace(
+                    step_id=cs.step_id,
+                    primitive=cs.primitive,
+                    action="failed",
+                    backend_path=list(self._last_step_backend_path),
+                    reason=reason,
+                )
+                return ExecutionResult(
+                    success=False,
+                    steps_ok=steps_ok_so_far + suffix_ok,
+                    steps_total=steps_total,
+                    message=reason,
+                    registry=dict(self.registry),
+                    trace=list(self.trace),
+                )
+            self._record_trace(
+                step_id=cs.step_id,
+                primitive=cs.primitive,
+                action="created",
+                backend_path=list(self._last_step_backend_path),
+                reason="controlled_recreate_suffix",
+            )
+            suffix_ok += 1
+
+        total_ok = steps_ok_so_far + suffix_ok
+        return ExecutionResult(
+            success=total_ok == steps_total,
+            steps_ok=total_ok,
+            steps_total=steps_total,
+            message=(
+                f"Executed {total_ok}/{steps_total} steps "
+                f"(edit with controlled recreate from '{start_step_id}')"
+            ),
+            registry=dict(self.registry),
+            trace=list(self.trace),
+        )
+
     def _record_trace(
         self,
         *,
@@ -447,6 +556,35 @@ class CadExecutor:
         previous_plan: Optional[Dict[str, Any]] = None,
     ) -> ExecutionResult:
         compiled_list = compile_plan(plan)
+        raw_steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict) and s]
+        compiled_ids = {cs.step_id for cs in compiled_list}
+        missing_compiled_steps: List[str] = []
+        for i, step in enumerate(raw_steps):
+            sid = str(step.get("id") or f"step_{i}")
+            if sid not in compiled_ids:
+                missing_compiled_steps.append(sid)
+
+        if missing_compiled_steps:
+            reason = (
+                "Plan contains non-compilable steps (unsupported or malformed): "
+                + ", ".join(missing_compiled_steps[:8])
+            )
+            self._record_trace(
+                step_id="compile",
+                primitive="plan",
+                action="failed",
+                backend_path=["compile_plan"],
+                reason=reason,
+            )
+            return ExecutionResult(
+                success=False,
+                steps_ok=0,
+                steps_total=len(raw_steps),
+                message=reason,
+                registry=dict(self.registry),
+                trace=list(self.trace),
+            )
+
         steps_total = len(compiled_list)
         mode = _normalize_name(plan.get("mode") or "create").lower()
         edit_mode = mode == "edit" or self.edit_mode
@@ -460,7 +598,7 @@ class CadExecutor:
             }
 
         steps_ok = 0
-        for compiled in compiled_list:
+        for compiled_index, compiled in enumerate(compiled_list):
             step_id = compiled.step_id
             primitive = compiled.primitive
             current_step = steps_by_id.get(step_id) or {}
@@ -524,6 +662,36 @@ class CadExecutor:
 
             feature_name = _get_feature_name_from_compiled_step(compiled)
             if edit_mode and feature_name and primitive in EXTRUDE_PRIMITIVES:
+                decision = None
+                if step_id in previous_steps and step_id in steps_by_id:
+                    decision = classify_edit_change(previous_steps[step_id], steps_by_id[step_id])
+                    if decision.classification == EDIT_UNSUPPORTED:
+                        reason = f"unsupported in-place edit for step '{step_id}': {decision.reason}"
+                        self._record_trace(
+                            step_id=step_id,
+                            primitive=primitive,
+                            action="failed",
+                            backend_path=["classify_edit_change"],
+                            reason=reason,
+                        )
+                        return ExecutionResult(
+                            success=False,
+                            steps_ok=steps_ok,
+                            steps_total=steps_total,
+                            message=reason,
+                            registry=dict(self.registry),
+                            trace=list(self.trace),
+                        )
+                    if decision.classification == EDIT_RECREATE_REQUIRED:
+                        return self._execute_controlled_recreate_suffix(
+                            compiled_list=compiled_list,
+                            start_index=compiled_index,
+                            steps_ok_so_far=steps_ok,
+                            steps_total=steps_total,
+                            session=session,
+                            decision_reason=f"recreate-required for step '{step_id}': {decision.reason}",
+                        )
+
                 found, find_err, find_path = self._feature_lookup(feature_name)
                 if find_err:
                     self._record_trace(
@@ -542,43 +710,6 @@ class CadExecutor:
                         trace=list(self.trace),
                     )
                 if found:
-                    if step_id in previous_steps and step_id in steps_by_id:
-                        decision = classify_edit_change(previous_steps[step_id], steps_by_id[step_id])
-                        if decision.classification == EDIT_RECREATE_REQUIRED:
-                            reason = f"recreate-required for step '{step_id}': {decision.reason}"
-                            self._record_trace(
-                                step_id=step_id,
-                                primitive=primitive,
-                                action="recreate-required",
-                                backend_path=find_path,
-                                reason=reason,
-                            )
-                            return ExecutionResult(
-                                success=False,
-                                steps_ok=steps_ok,
-                                steps_total=steps_total,
-                                message=reason,
-                                registry=dict(self.registry),
-                                trace=list(self.trace),
-                            )
-                        if decision.classification == EDIT_UNSUPPORTED:
-                            reason = f"unsupported in-place edit for step '{step_id}': {decision.reason}"
-                            self._record_trace(
-                                step_id=step_id,
-                                primitive=primitive,
-                                action="failed",
-                                backend_path=find_path,
-                                reason=reason,
-                            )
-                            return ExecutionResult(
-                                success=False,
-                                steps_ok=steps_ok,
-                                steps_total=steps_total,
-                                message=reason,
-                                registry=dict(self.registry),
-                                trace=list(self.trace),
-                            )
-
                     new_distance = _get_distance_from_compiled_step(compiled)
                     updated, update_err, update_path = self._update_feature_distance(feature_name, new_distance)
                     backend_path = find_path + update_path

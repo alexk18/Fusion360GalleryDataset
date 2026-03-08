@@ -25,6 +25,8 @@ from cad.cad_validate import validate_plan, _poly_area
 from cad.cad_compiler import compile_plan, CompiledStep
 from cad.cad_capabilities import Capability, CapabilityModel, STATUS_UNSUPPORTED, default_capability_model
 from cad.cad_backend import FusionCadBackend
+from cad.cad_operator import run_cad_operator
+import cad.cad_operator as cad_operator_module
 from cad.cad_executor import (
     CadExecutor,
     ExecutionResult,
@@ -150,6 +152,25 @@ def test_validate_plan_rect_min_size():
     vr = validate_plan(plan)
     assert not vr.valid
     assert any("rect" in e.lower() or "min" in e.lower() for e in vr.errors)
+
+
+def test_validate_profile_type_mismatch_is_rejected():
+    plan = {
+        "session": "s1",
+        "steps": [
+            {
+                "id": "bad_rect",
+                "primitive": "rect_extrude",
+                "plane": "XY",
+                "profile": {"type": "circle", "radius": 2},
+                "distance": 1,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    vr = validate_plan(plan)
+    assert not vr.valid
+    assert any("requires profile.type='rect'" in e.lower() for e in vr.errors)
 
 
 def test_compile_plan_tank():
@@ -411,7 +432,295 @@ def test_unsupported_edit_fails_when_previous_plan_given():
     executor = CadExecutor(MockClient(), dry_run=False, edit_mode=True)
     result = executor.execute_plan(plan, previous_plan=previous)
     assert not result.success
-    assert "recreate-required" in result.message.lower() or "profile" in result.message.lower()
+    assert (
+        "recreate-required" in result.message.lower()
+        or "profile" in result.message.lower()
+        or "controlled recreate blocked" in result.message.lower()
+    )
+
+
+def test_run_cad_operator_edit_distance_update_with_previous_plan():
+    calls = []
+
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            calls.append((feature_name, distance))
+            return _MockResponse(200, {})
+
+    previous = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 9,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = run_cad_operator(
+        MockClient(),
+        plan,
+        edit_mode=True,
+        previous_plan=previous,
+        dry_run=False,
+        step_delay=0.0,
+    )
+    assert result.success, result.message
+    assert calls == [("s1__hull__feat", 9.0)]
+    assert any(ev.action == "updated" for ev in result.trace)
+
+
+def test_run_cad_operator_edit_recreate_required_with_previous_plan():
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            return _MockResponse(200, {})
+
+    previous = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XZ",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = run_cad_operator(
+        MockClient(),
+        plan,
+        edit_mode=True,
+        previous_plan=previous,
+        dry_run=False,
+        step_delay=0.0,
+    )
+    assert not result.success
+    assert (
+        "recreate-required" in result.message.lower()
+        or "plane" in result.message.lower()
+        or "controlled recreate blocked" in result.message.lower()
+    )
+    assert any(ev.action == "recreate-required" for ev in result.trace)
+
+
+def test_controlled_recreate_executes_suffix_when_feature_absent():
+    class MockClient:
+        def clear(self):
+            raise AssertionError("clear() must never be called in controlled recreate")
+
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": False, "count": 0})
+
+        def add_sketch(self, plane, sketch_name=None):
+            return _MockResponse(200, {"sketch_name": sketch_name or "s1__hull__sk"})
+
+        def add_point(self, sketch_name, pt):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def close_profile(self, sketch_name):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def add_extrude(self, sketch_name, profile_id, distance, operation, feature_name=None):
+            return _MockResponse(200, {})
+
+    previous = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"sketch": "s1__hull__sk", "feature": "s1__hull__feat"},
+                "plane": "XZ",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False, edit_mode=True).execute_plan(plan, previous_plan=previous)
+    assert result.success, result.message
+    assert any(ev.action == "recreate-required" for ev in result.trace)
+    assert any(ev.action == "created" for ev in result.trace)
+    assert "hull" in result.registry
+    assert result.registry["hull"]["updated"] is False
+
+
+def test_controlled_recreate_blocked_when_existing_suffix_features_present():
+    class MockClient:
+        def clear(self):
+            raise AssertionError("clear() must never be called in controlled recreate")
+
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+    previous = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XZ",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False, edit_mode=True).execute_plan(plan, previous_plan=previous)
+    assert not result.success
+    assert "controlled recreate blocked" in result.message.lower()
+    assert any(ev.action == "recreate-required" for ev in result.trace)
+    assert any(ev.action == "failed" for ev in result.trace)
+
+
+def test_run_cad_operator_post_fix_preserves_previous_plan():
+    previous = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 5,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 6,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute_plan(self, _plan, previous_plan=None):
+            calls.append(previous_plan)
+            return ExecutionResult(success=True, steps_ok=1, steps_total=1, message="ok", trace=[])
+
+    old_exec = cad_operator_module.CadExecutor
+    old_inspector = cad_operator_module.run_inspector
+    old_fixer = cad_operator_module.run_fixer
+    try:
+        cad_operator_module.CadExecutor = FakeExecutor
+        cad_operator_module.run_inspector = lambda *_args, **_kwargs: {"score": 0.0, "issues": ["adjust"]}
+        cad_operator_module.run_fixer = lambda *_args, **_kwargs: {
+            "patches": [{"op": "replace", "path": "steps[hull].distance", "value": 7.0}],
+            "intent": "minimal_change",
+        }
+        run_cad_operator(
+            object(),
+            plan,
+            edit_mode=True,
+            previous_plan=previous,
+            run_post_render_fix=True,
+            max_post_fix_iterations=1,
+            take_screenshot=lambda: "img",
+            call_llm_with_image=lambda *_args, **_kwargs: "{}",
+            call_llm=lambda *_args, **_kwargs: "{}",
+            step_delay=0.0,
+        )
+    finally:
+        cad_operator_module.CadExecutor = old_exec
+        cad_operator_module.run_inspector = old_inspector
+        cad_operator_module.run_fixer = old_fixer
+
+    assert len(calls) == 2
+    assert calls[0] is previous
+    assert calls[1] is previous
 
 
 def test_classify_edit_change_semantics():
@@ -437,6 +746,23 @@ def test_classify_edit_change_semantics():
     after_unsupported["profile"] = {"type": "spline"}
     decision = classify_edit_change(before, after_unsupported)
     assert decision.classification == EDIT_UNSUPPORTED
+
+
+def test_executor_unknown_primitive_does_not_succeed():
+    class MockClient:
+        pass
+
+    plan = {
+        "session": "s1",
+        "mode": "create",
+        "steps": [
+            {"id": "mystery", "primitive": "unknown_primitive_xyz", "distance": 1},
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False).execute_plan(plan)
+    assert not result.success
+    assert "non-compilable" in result.message.lower() or "unsupported" in result.message.lower()
+    assert any(ev.action == "failed" for ev in result.trace)
 
 
 def test_unsupported_primitive_loft_fails_in_normal_run():
@@ -509,6 +835,53 @@ def test_add_sketch_existing_name_contract_authoritative():
     assert result.response.json()["data"]["sketch_name"] == "existing_sketch"
 
 
+def test_backend_list_tools_and_model_state_summary():
+    class MockClient:
+        def list_tools(self):
+            return _MockResponse(200, {"tools": [{"name": "add_sketch"}]})
+
+        def list_features(self):
+            return _MockResponse(
+                200,
+                {
+                    "sketches": [{"name": "s1", "type": "Sketch"}],
+                    "extrude_features": [{"name": "f1", "type": "ExtrudeFeature"}],
+                    "counts": {"sketches": 1, "extrude_features": 1},
+                },
+            )
+
+        def query_bounding_box(self):
+            return _MockResponse(200, {"bounding_box": {"min": {"x": 0}, "max": {"x": 1}}})
+
+    backend = FusionCadBackend(MockClient())
+    tools_result = backend.list_tools()
+    assert tools_result.ok
+    assert isinstance(tools_result.response.json().get("data", {}).get("tools", []), list)
+
+    state_result = backend.get_model_state()
+    assert state_result.ok
+    state = state_result.response
+    assert "features" in state and "bounding_box" in state
+    assert state["features"]["counts"]["sketches"] == 1
+    assert "bounding_box" in state["bounding_box"]
+
+
+def test_backend_model_state_capability_rejection():
+    class MockClient:
+        def list_features(self):
+            return _MockResponse(200, {"counts": {"sketches": 0, "extrude_features": 0}})
+
+        def query_bounding_box(self):
+            return _MockResponse(200, {"bounding_box": {}})
+
+    caps = default_capability_model()
+    caps.capabilities["model_state_summary"] = Capability(STATUS_UNSUPPORTED, "disabled in test")
+    backend = FusionCadBackend(MockClient(), capabilities=caps)
+    state_result = backend.get_model_state()
+    assert not state_result.ok
+    assert "model_state_summary" in state_result.reason
+
+
 def test_duplicate_name_propagates_to_executor():
     """When find_entity_by_name returns error (e.g. duplicate), executor fails with that message."""
     class DupResponse:
@@ -577,6 +950,7 @@ if __name__ == "__main__":
     test_validate_plan_ok()
     test_validate_plan_budget()
     test_validate_plan_rect_min_size()
+    test_validate_profile_type_mismatch_is_rejected()
     test_validate_rejects_arcs()
     test_compile_plan_tank()
     test_resolve_data()
@@ -591,11 +965,19 @@ if __name__ == "__main__":
     test_create_path_supported_primitive_and_registry()
     test_no_silent_skip_on_existing_feature_when_edit_expected()
     test_unsupported_edit_fails_when_previous_plan_given()
+    test_run_cad_operator_edit_distance_update_with_previous_plan()
+    test_run_cad_operator_edit_recreate_required_with_previous_plan()
+    test_controlled_recreate_executes_suffix_when_feature_absent()
+    test_controlled_recreate_blocked_when_existing_suffix_features_present()
+    test_run_cad_operator_post_fix_preserves_previous_plan()
     test_classify_edit_change_semantics()
+    test_executor_unknown_primitive_does_not_succeed()
     test_unsupported_primitive_loft_fails_in_normal_run()
     test_dry_run_unsupported_primitive_is_stubbed_not_built()
     test_capability_aware_validation_rejects_unavailable_feature()
     test_add_sketch_existing_name_contract_authoritative()
+    test_backend_list_tools_and_model_state_summary()
+    test_backend_model_state_capability_rejection()
     test_duplicate_name_propagates_to_executor()
     test_clear_not_used_in_edit_mode()
     test_docs_contract_mentions_actual_semantics()

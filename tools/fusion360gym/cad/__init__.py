@@ -24,6 +24,8 @@ from .cad_multimodal import (
     text_to_cad_plan,
     image_to_cad_plan,
 )
+from .cad_benchmark import run_create_benchmark, default_create_benchmark_cases, benchmark_routing_matrix
+from .cad_quality_metrics import compute_quality_metrics
 
 __all__ = [
     "PLAN_SCHEMA_VERSION",
@@ -47,4 +49,8 @@ __all__ = [
     "structural_from_legacy_bboxes",
     "text_to_cad_plan",
     "image_to_cad_plan",
+    "run_create_benchmark",
+    "default_create_benchmark_cases",
+    "benchmark_routing_matrix",
+    "compute_quality_metrics",
 ]

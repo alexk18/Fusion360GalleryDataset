@@ -12,6 +12,7 @@ Usage:
 
 import os
 import sys
+import copy
 
 FUSION_DIR = os.path.join(os.path.dirname(__file__), "..")
 if FUSION_DIR not in sys.path:
@@ -33,15 +34,17 @@ PORT = int(os.environ.get("FUSION_PORT", "8080"))
 
 def main():
     which = (sys.argv[1] if len(sys.argv) > 1 else "tank").strip().lower()
+    previous_plan = None
 
     if which == "tank":
-        plan = dict(EXAMPLE_PLAN_LOWPOLY_TANK)
+        plan = copy.deepcopy(EXAMPLE_PLAN_LOWPOLY_TANK)
         print("Plan: lowpoly tank (hull, turret, gun, wheel)")
     elif which == "plane":
-        plan = dict(EXAMPLE_PLAN_LOWPOLY_PLANE)
+        plan = copy.deepcopy(EXAMPLE_PLAN_LOWPOLY_PLANE)
         print("Plan: lowpoly plane (fuselage, wing, tail)")
     elif which == "edit":
-        plan = dict(EXAMPLE_PLAN_LOWPOLY_TANK)
+        previous_plan = copy.deepcopy(EXAMPLE_PLAN_LOWPOLY_TANK)
+        plan = copy.deepcopy(previous_plan)
         plan["mode"] = "edit"
         patch = {
             "patches": [
@@ -86,7 +89,7 @@ def main():
         step_delay=0.4,
         edit_mode=(plan.get("mode") == "edit"),
     )
-    result = executor.execute_plan(plan)
+    result = executor.execute_plan(plan, previous_plan=previous_plan)
     if result.success:
         print(f"Done: {result.message}")
     else:

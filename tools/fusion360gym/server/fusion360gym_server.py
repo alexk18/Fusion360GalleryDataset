@@ -49,6 +49,7 @@ class Fusion360GymServerRequestHandler(BaseHTTPRequestHandler):
         return
 
     def do_POST(self):
+        command = "unknown"
         try:
             post_data = self.get_post_data()
             self.logger.log("\n")
@@ -74,14 +75,15 @@ class Fusion360GymServerRequestHandler(BaseHTTPRequestHandler):
                 data = post_data["data"]
 
             status_code, message, return_data = self.runner.run_command(command, data)
+            meta = self.runner.get_last_meta() if hasattr(self.runner, "get_last_meta") else {}
             if return_data is not None and isinstance(return_data, Path):
                     self.logger.log(f"[{status_code}] {return_data}")
-                    self.respond_binary_file(status_code, return_data)
+                    self.respond_binary_file(status_code, return_data, meta=meta)
             else:
                 self.logger.log(f"[{status_code}] {message}")
                 # if return_data is not None:
                 #     self.logger.log(f"\t{return_data}")
-                self.respond(status_code, message, return_data)
+                self.respond(status_code, message, return_data, meta=meta)
 
         except Exception as ex:
             message = f"""Error processing {command} command\n
@@ -99,18 +101,30 @@ class Fusion360GymServerRequestHandler(BaseHTTPRequestHandler):
         post_body_json = json.loads(post_body)
         return post_body_json
 
-    def respond_binary_file(self, status_code, binary_file):
+    def respond_binary_file(self, status_code, binary_file, meta=None):
         self.send_response(status_code)
         self.send_header("Content-type", "application/octet-stream")
+        if isinstance(meta, dict):
+            trace_id = meta.get("trace_id")
+            code = meta.get("code")
+            if trace_id:
+                self.send_header("X-Trace-Id", str(trace_id))
+            if code:
+                self.send_header("X-Result-Code", str(code))
         self.end_headers()
         with open(binary_file, "rb") as file_handle:
             shutil.copyfileobj(file_handle, self.wfile)
         # Remove the file we made after we are done
         binary_file.unlink()
 
-    def respond(self, status_code, message, return_data=None):
+    def respond(self, status_code, message, return_data=None, meta=None):
+        if not isinstance(meta, dict):
+            meta = {}
         data = {
             "status": status_code,
+            "ok": status_code < 400,
+            "code": meta.get("code", "ok" if status_code < 400 else "error"),
+            "trace_id": meta.get("trace_id", ""),
             "message": message
         }
         if return_data is not None:
