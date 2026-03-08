@@ -16,6 +16,14 @@ from .cad_patch import apply_patch
 from .cad_validate import validate_plan, ValidationResult
 from .cad_compiler import compile_plan, CompiledStep
 from .cad_executor import CadExecutor, ExecutionResult
+from .cad_multimodal import (
+    StructuralPart,
+    StructuralObjectRepresentation,
+    LegacyBboxCadPlanner,
+    structural_from_legacy_bboxes,
+    text_to_cad_plan,
+    image_to_cad_plan,
+)
 
 __all__ = [
     "PLAN_SCHEMA_VERSION",
@@ -33,4 +41,10 @@ __all__ = [
     "CompiledStep",
     "CadExecutor",
     "ExecutionResult",
+    "StructuralPart",
+    "StructuralObjectRepresentation",
+    "LegacyBboxCadPlanner",
+    "structural_from_legacy_bboxes",
+    "text_to_cad_plan",
+    "image_to_cad_plan",
 ]

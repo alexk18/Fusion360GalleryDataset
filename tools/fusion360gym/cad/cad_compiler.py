@@ -2,7 +2,7 @@
 Deterministic compiler: CAD DSL Plan -> sequence of server call descriptors.
 
 Each step is compiled to: add_sketch, draw profile (add_point/add_line/add_circle/close_profile),
-add_extrude (or stub for loft/sweep/fillet until server supports them).
+add_extrude (or stub for unsupported advanced primitives until server supports them).
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def _circle_profile_calls(cx: float, cy: float, radius: float, sketch_name_key: 
 
 
 def _poly_profile_calls(pts: List[Dict], arcs: Optional[List[Dict]], sketch_name_key: str) -> List[CompiledCall]:
-    """Polygon: add_point for each vertex; optional arcs approximated by segments or single arc if one segment."""
+    """Polygon: add_point for each vertex. Arcs are not supported (validator rejects profile.arcs); only straight segments."""
     out = []
     for p in pts:
         x = float(p.get("x", 0))
@@ -159,7 +159,7 @@ def _compile_step(step: Dict[str, Any], session: str) -> Optional[CompiledStep]:
         profile_id_source = len(calls) - 2
         return CompiledStep(step_id=step_id, primitive=prim, calls=calls, profile_id_source=profile_id_source)
 
-    if prim in ("loft", "sweep", "fillet"):
+    if prim in ("loft", "sweep", "fillet", "chamfer", "revolve"):
         return CompiledStep(step_id=step_id, primitive=prim, calls=[], profile_id_source=-1)
 
     return None
@@ -168,7 +168,8 @@ def _compile_step(step: Dict[str, Any], session: str) -> Optional[CompiledStep]:
 def compile_plan(plan: Dict[str, Any]) -> List[CompiledStep]:
     """
     Compile a full Plan to a list of CompiledStep.
-    Steps with unsupported primitives (loft/sweep/fillet) get empty calls (executor can skip or stub).
+    Steps with unsupported advanced primitives (loft/sweep/fillet/chamfer/revolve)
+    get empty calls (executor can fail or dry-run-stub deterministically).
     """
     session = str(plan.get("session") or "session")
     steps = plan.get("steps") or []

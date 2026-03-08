@@ -97,6 +97,10 @@ class CommandRunner():
                 result = self.sketch_extrusion.find_entity_by_name(data)
             elif command == "update_extrude":
                 result = self.sketch_extrusion.update_extrude(data)
+            elif command == "list_features":
+                result = self.sketch_extrusion.list_features(data)
+            elif command == "query_bounding_box":
+                result = self.sketch_extrusion.query_bounding_box(data)
             elif command == "set_target":
                 result = self.face_extrusion.set_target(data)
             elif command == "revert_to_target":

@@ -23,7 +23,21 @@ from cad.cad_dsl import (
 from cad.cad_patch import apply_patch, _parse_path
 from cad.cad_validate import validate_plan, _poly_area
 from cad.cad_compiler import compile_plan, CompiledStep
-from cad.cad_executor import CadExecutor, ExecutionResult, _resolve_data, _get_profile_id_from_response
+from cad.cad_capabilities import Capability, CapabilityModel, STATUS_UNSUPPORTED, default_capability_model
+from cad.cad_backend import FusionCadBackend
+from cad.cad_executor import (
+    CadExecutor,
+    ExecutionResult,
+    _resolve_data,
+    _get_profile_id_from_response,
+    detect_unsupported_edit,
+    classify_edit_change,
+    EDIT_RECREATE_REQUIRED,
+    EDIT_UNSUPPORTED,
+    EDIT_IN_PLACE_EDITABLE,
+    _get_distance_from_compiled_step,
+    _get_feature_name_from_compiled_step,
+)
 
 
 def test_make_step_names():
@@ -195,6 +209,364 @@ def test_executor_dry_run():
     assert result.success
 
 
+def test_get_distance_and_feature_name_from_compiled():
+    from cad.cad_compiler import compile_plan
+    plan = {"session": "s", "steps": [{"id": "a", "primitive": "rect_extrude", "plane": "XY", "profile": {"type": "rect", "w": 2, "h": 2}, "distance": 7.5, "operation": "NewBodyFeatureOperation"}]}
+    compiled = compile_plan(plan)
+    assert len(compiled) == 1
+    assert _get_distance_from_compiled_step(compiled[0]) == 7.5
+    assert _get_feature_name_from_compiled_step(compiled[0]) == "s__a__feat"
+
+
+def test_detect_unsupported_edit_distance_only():
+    before = {"id": "hull", "plane": "XY", "operation": "NewBodyFeatureOperation", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5}
+    after = {"id": "hull", "plane": "XY", "operation": "NewBodyFeatureOperation", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 12}
+    ok, reason = detect_unsupported_edit(before, after)
+    assert ok is True
+    assert reason == ""
+
+
+def test_detect_unsupported_edit_profile_change():
+    before = {"id": "hull", "plane": "XY", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5}
+    after = {"id": "hull", "plane": "XY", "profile": {"type": "rect", "w": 15, "h": 8}, "distance": 5}
+    ok, reason = detect_unsupported_edit(before, after)
+    assert ok is False
+    assert "profile" in reason.lower() or "unsupported" in reason.lower()
+
+
+def test_detect_unsupported_edit_plane_change():
+    before = {"id": "hull", "plane": "XY", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5}
+    after = {"id": "hull", "plane": "XZ", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5}
+    ok, reason = detect_unsupported_edit(before, after)
+    assert ok is False
+    assert "plane" in reason.lower() or "unsupported" in reason.lower()
+
+
+class _MockResponse:
+    def __init__(self, status_code=200, data=None):
+        self.status_code = status_code
+        self._data = data or {}
+
+    def json(self):
+        return {"data": self._data, "message": ""}
+
+
+def test_edit_mode_calls_update_extrude():
+    """In edit mode when feature 'exists', executor must call update_extrude, not skip silently."""
+    calls = []
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            calls.append(("update_extrude", feature_name, distance))
+            return _MockResponse(200)
+
+        def send_command(self, cmd, data=None):
+            return _MockResponse(200, {})
+
+        def add_sketch(self, plane, sketch_name=None):
+            return _MockResponse(200, {"sketch_name": "s1__hull__sk"})
+
+        def add_point(self, sn, pt):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def close_profile(self, sn):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def add_extrude(self, sn, pid, distance, operation, feature_name=None):
+            return _MockResponse(200)
+
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {"id": "hull", "primitive": "rect_extrude", "names": {"sketch": "s1__hull__sk", "feature": "s1__hull__feat"}, "plane": "XY", "profile": {"type": "rect", "cx": 0, "cy": 0, "w": 10, "h": 8}, "distance": 6.0, "operation": "NewBodyFeatureOperation"},
+        ],
+    }
+    client = MockClient()
+    executor = CadExecutor(client, dry_run=False, edit_mode=True)
+    result = executor.execute_plan(plan)
+    assert result.success, result.message
+    assert len(calls) == 1
+    assert calls[0][0] == "update_extrude"
+    assert calls[0][1] == "s1__hull__feat"
+    assert calls[0][2] == 6.0
+
+
+def test_edit_mode_registry_after_update():
+    """Registry must be updated after successful update_extrude."""
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            return _MockResponse(200)
+
+        def send_command(self, cmd, data=None):
+            return _MockResponse(200, {})
+
+    plan = {"session": "s1", "mode": "edit", "steps": [{"id": "hull", "primitive": "rect_extrude", "names": {"feature": "s1__hull__feat"}, "plane": "XY", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 3, "operation": "NewBodyFeatureOperation"}]}
+    executor = CadExecutor(MockClient(), dry_run=False, edit_mode=True)
+    result = executor.execute_plan(plan)
+    assert result.success
+    assert "hull" in result.registry
+    assert result.registry["hull"].get("feature_name") == "s1__hull__feat"
+    assert result.registry["hull"].get("updated") is True
+
+
+def test_create_path_supported_primitive_and_registry():
+    """Create path works and registry updates after add_extrude."""
+    class MockClient:
+        def add_sketch(self, plane, sketch_name=None):
+            return _MockResponse(200, {"sketch_name": sketch_name or "s1__box__sk"})
+
+        def add_point(self, sketch_name, pt):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def close_profile(self, sketch_name):
+            return _MockResponse(200, {"profiles": {"p1": {}}})
+
+        def add_extrude(self, sketch_name, profile_id, distance, operation, feature_name=None):
+            return _MockResponse(200, {})
+
+    plan = {
+        "session": "s1",
+        "mode": "create",
+        "steps": [
+            {
+                "id": "box",
+                "primitive": "rect_extrude",
+                "names": {"sketch": "s1__box__sk", "feature": "s1__box__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "cx": 0, "cy": 0, "w": 10, "h": 8},
+                "distance": 2.0,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False).execute_plan(plan)
+    assert result.success, result.message
+    assert "box" in result.registry
+    assert result.registry["box"]["feature_name"] == "s1__box__feat"
+    assert result.registry["box"]["updated"] is False
+
+
+def test_no_silent_skip_on_existing_feature_when_edit_expected():
+    """Existing feature must be updated, not silently skipped or recreated."""
+    update_calls = []
+
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            update_calls.append((feature_name, distance))
+            return _MockResponse(200, {})
+
+        def add_sketch(self, plane, sketch_name=None):
+            raise AssertionError("add_sketch should not run for existing feature update")
+
+        def add_point(self, sketch_name, pt):
+            raise AssertionError("add_point should not run for existing feature update")
+
+        def close_profile(self, sketch_name):
+            raise AssertionError("close_profile should not run for existing feature update")
+
+        def add_extrude(self, sketch_name, profile_id, distance, operation, feature_name=None):
+            raise AssertionError("add_extrude should not run for existing feature update")
+
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 10, "h": 8},
+                "distance": 11.0,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False, edit_mode=True).execute_plan(plan)
+    assert result.success, result.message
+    assert update_calls == [("s1__hull__feat", 11.0)]
+    assert any(ev.action == "updated" for ev in result.trace)
+
+
+def test_unsupported_edit_fails_when_previous_plan_given():
+    """When previous_plan is provided and step changed unsupported field, execute_plan fails."""
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def send_command(self, cmd, data=None):
+            return _MockResponse(200, {})
+
+    previous = {"session": "s1", "mode": "edit", "steps": [{"id": "hull", "primitive": "rect_extrude", "names": {"feature": "s1__hull__feat"}, "plane": "XY", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5, "operation": "NewBodyFeatureOperation"}]}
+    plan = {"session": "s1", "mode": "edit", "steps": [{"id": "hull", "primitive": "rect_extrude", "names": {"feature": "s1__hull__feat"}, "plane": "XY", "profile": {"type": "rect", "w": 20, "h": 8}, "distance": 5, "operation": "NewBodyFeatureOperation"}]}
+    executor = CadExecutor(MockClient(), dry_run=False, edit_mode=True)
+    result = executor.execute_plan(plan, previous_plan=previous)
+    assert not result.success
+    assert "recreate-required" in result.message.lower() or "profile" in result.message.lower()
+
+
+def test_classify_edit_change_semantics():
+    before = {
+        "id": "h",
+        "primitive": "rect_extrude",
+        "plane": "XY",
+        "operation": "NewBodyFeatureOperation",
+        "profile": {"type": "rect", "w": 10, "h": 8},
+        "distance": 3,
+    }
+    after_distance = dict(before)
+    after_distance["distance"] = 9
+    decision = classify_edit_change(before, after_distance)
+    assert decision.classification == EDIT_IN_PLACE_EDITABLE
+
+    after_plane = dict(before)
+    after_plane["plane"] = "XZ"
+    decision = classify_edit_change(before, after_plane)
+    assert decision.classification == EDIT_RECREATE_REQUIRED
+
+    after_unsupported = dict(before)
+    after_unsupported["profile"] = {"type": "spline"}
+    decision = classify_edit_change(before, after_unsupported)
+    assert decision.classification == EDIT_UNSUPPORTED
+
+
+def test_unsupported_primitive_loft_fails_in_normal_run():
+    """Loft/sweep/fillet must not report success in normal execution."""
+    from cad.cad_compiler import compile_plan
+    plan = {"session": "s1", "steps": [{"id": "wing", "primitive": "loft", "loft": {"profiles": [{"sketch": "a", "profile_id": "p1"}, {"sketch": "b", "profile_id": "p2"}]}}]}
+    compiled = compile_plan(plan)
+    assert len(compiled) == 1
+    assert compiled[0].primitive == "loft"
+    client = type("C", (), {"send_command": lambda s, d: None})()
+    executor = CadExecutor(client, dry_run=False)
+    result = executor.execute_plan(plan)
+    assert not result.success
+    assert "loft" in result.message.lower() or "unsupported" in result.message.lower()
+
+
+def test_dry_run_unsupported_primitive_is_stubbed_not_built():
+    plan = {"session": "s1", "steps": [{"id": "wing", "primitive": "loft", "loft": {"profiles": [{"sketch": "a", "profile_id": "p1"}, {"sketch": "b", "profile_id": "p2"}]}}]}
+    client = type("C", (), {"send_command": lambda self, cmd, data=None: _MockResponse(200, {})})()
+    result = CadExecutor(client, dry_run=True).execute_plan(plan)
+    assert result.success
+    assert result.steps_ok == 1
+    assert not result.registry
+    assert any(ev.action == "unsupported" for ev in result.trace)
+
+
+def test_validate_rejects_arcs():
+    """Validator must reject poly profile with arcs."""
+    plan = {
+        "session": "s1",
+        "steps": [
+            {"id": "curved", "primitive": "poly_extrude", "plane": "XY", "profile": {"type": "poly", "pts": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}, {"x": 0, "y": 2}], "arcs": [{"i_start": 0, "i_end": 1, "angle_deg": 90}]}, "distance": 1, "operation": "NewBodyFeatureOperation"},
+        ],
+    }
+    vr = validate_plan(plan)
+    assert not vr.valid
+    assert any("arc" in e.lower() for e in vr.errors)
+
+
+def test_capability_aware_validation_rejects_unavailable_feature():
+    caps = default_capability_model()
+    caps.capabilities["extrude_new_body"] = Capability(STATUS_UNSUPPORTED, "disabled for test")
+    plan = {
+        "session": "s1",
+        "steps": [
+            {
+                "id": "box",
+                "primitive": "rect_extrude",
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 2, "h": 2},
+                "distance": 1.0,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    vr = validate_plan(plan, capabilities=caps)
+    assert not vr.valid
+    assert any("capability" in e.lower() for e in vr.errors)
+
+
+def test_add_sketch_existing_name_contract_authoritative():
+    """When sketch name already exists, backend accepts existing sketch response (plane ignored by server)."""
+    class MockClient:
+        def add_sketch(self, sketch_plane, sketch_name=None):
+            return _MockResponse(200, {"sketch_name": "existing_sketch"})
+
+    backend = FusionCadBackend(MockClient())
+    result = backend.create_sketch("XZ", sketch_name="existing_sketch")
+    assert result.ok
+    assert result.response.json()["data"]["sketch_name"] == "existing_sketch"
+
+
+def test_duplicate_name_propagates_to_executor():
+    """When find_entity_by_name returns error (e.g. duplicate), executor fails with that message."""
+    class DupResponse:
+        status_code = 500
+        def json(self):
+            return {"message": "Duplicate entity name: 'x' found 2 times."}
+
+    class MockClient:
+        def find_entity_by_name(self, etype, name):
+            return DupResponse()
+
+    plan = {"session": "s1", "mode": "edit", "steps": [{"id": "hull", "primitive": "rect_extrude", "names": {"feature": "x"}, "plane": "XY", "profile": {"type": "rect", "w": 10, "h": 8}, "distance": 5, "operation": "NewBodyFeatureOperation"}]}
+    executor = CadExecutor(MockClient(), dry_run=False, edit_mode=True)
+    result = executor.execute_plan(plan)
+    assert not result.success
+    assert "duplicate" in result.message.lower() or "find" in result.message.lower()
+
+
+def test_clear_not_used_in_edit_mode():
+    class MockClient:
+        def clear(self):
+            raise AssertionError("clear() must never be called by CAD executor in edit mode")
+
+        def find_entity_by_name(self, etype, name):
+            return _MockResponse(200, {"found": True, "count": 1})
+
+        def update_extrude(self, feature_name, distance):
+            return _MockResponse(200, {})
+
+    plan = {
+        "session": "s1",
+        "mode": "edit",
+        "steps": [
+            {
+                "id": "hull",
+                "primitive": "rect_extrude",
+                "names": {"feature": "s1__hull__feat"},
+                "plane": "XY",
+                "profile": {"type": "rect", "w": 5, "h": 5},
+                "distance": 4,
+                "operation": "NewBodyFeatureOperation",
+            },
+        ],
+    }
+    result = CadExecutor(MockClient(), dry_run=False, edit_mode=True).execute_plan(plan)
+    assert result.success
+
+
+def test_docs_contract_mentions_actual_semantics():
+    readme_path = os.path.join(FUSION_DIR, "cad", "README_CAD_DSL.md")
+    with open(readme_path, "r", encoding="utf-8") as fh:
+        text = fh.read().lower()
+    assert "no fake success" in text
+    assert "add_sketch contract" in text
+    assert "arcs" in text and "not supported" in text
+    assert "legacy" in text and "bbox" in text
+
+
 if __name__ == "__main__":
     test_make_step_names()
     test_parse_path()
@@ -205,8 +577,26 @@ if __name__ == "__main__":
     test_validate_plan_ok()
     test_validate_plan_budget()
     test_validate_plan_rect_min_size()
+    test_validate_rejects_arcs()
     test_compile_plan_tank()
     test_resolve_data()
     test_get_profile_id_from_response()
     test_executor_dry_run()
+    test_get_distance_and_feature_name_from_compiled()
+    test_detect_unsupported_edit_distance_only()
+    test_detect_unsupported_edit_profile_change()
+    test_detect_unsupported_edit_plane_change()
+    test_edit_mode_calls_update_extrude()
+    test_edit_mode_registry_after_update()
+    test_create_path_supported_primitive_and_registry()
+    test_no_silent_skip_on_existing_feature_when_edit_expected()
+    test_unsupported_edit_fails_when_previous_plan_given()
+    test_classify_edit_change_semantics()
+    test_unsupported_primitive_loft_fails_in_normal_run()
+    test_dry_run_unsupported_primitive_is_stubbed_not_built()
+    test_capability_aware_validation_rejects_unavailable_feature()
+    test_add_sketch_existing_name_contract_authoritative()
+    test_duplicate_name_propagates_to_executor()
+    test_clear_not_used_in_edit_mode()
+    test_docs_contract_mentions_actual_semantics()
     print("All tests passed.")

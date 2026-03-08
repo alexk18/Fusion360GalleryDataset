@@ -27,7 +27,10 @@ importlib.reload(match)
 class CommandSketchExtrusion(CommandBase):
 
     def add_sketch(self, data):
-        """Add a sketch or return existing one by name (ensure semantics). Optional sketch_name for durable identification."""
+        """Add a sketch or return existing one by name (ensure semantics). Optional sketch_name for durable identification.
+        Contract: When sketch_name is given and a sketch with that name already exists, the existing sketch is returned
+        and sketch_plane is informational only — the existing sketch's plane is not changed. Caller must not assume
+        they can build a new profile by appending add_point/add_line (edit only via update_extrude)."""
         if data is None or "sketch_plane" not in data:
             return self.runner.return_failure("sketch_plane not specified")
         sketch_name_requested = None
@@ -446,3 +449,33 @@ class CommandSketchExtrusion(CommandBase):
             return self.return_extrude_data(extrude_feature)
         except Exception as ex:
             return self.runner.return_failure(f"update_extrude failed: {ex}")
+
+    def list_features(self, data=None):
+        """List sketch/extrude features for capability-aware inspection."""
+        comp = self.design_state.reconstruction.component
+        sketches = []
+        for i in range(comp.sketches.count):
+            sk = comp.sketches.item(i)
+            sketches.append({"name": getattr(sk, "name", ""), "type": "Sketch"})
+        extrudes = []
+        for i in range(comp.features.extrudeFeatures.count):
+            feat = comp.features.extrudeFeatures.item(i)
+            extrudes.append({"name": getattr(feat, "name", ""), "type": "ExtrudeFeature"})
+        return self.runner.return_success(
+            {
+                "sketches": sketches,
+                "extrude_features": extrudes,
+                "counts": {
+                    "sketches": len(sketches),
+                    "extrude_features": len(extrudes),
+                },
+            }
+        )
+
+    def query_bounding_box(self, data=None):
+        """Return current reconstruction bounding box."""
+        try:
+            bbox = self.design_state.reconstruction.component.boundingBox
+            return self.runner.return_success({"bounding_box": serialize.bounding_box3d(bbox)})
+        except Exception as ex:
+            return self.runner.return_failure(f"query_bounding_box failed: {ex}")

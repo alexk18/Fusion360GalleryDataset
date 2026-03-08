@@ -419,6 +419,14 @@ class Fusion360GymClient():
         command_data = {"feature_name": feature_name, "distance": float(distance)}
         return self.send_command("update_extrude", data=command_data)
 
+    def list_features(self):
+        """List sketches/extrudes currently present in reconstruction component."""
+        return self.send_command("list_features", data={})
+
+    def query_bounding_box(self):
+        """Query current reconstruction bounding box."""
+        return self.send_command("query_bounding_box", data={})
+
     # -------------------------------------------------------------------------
     # TARGET RECONSTRUCTION
     # -------------------------------------------------------------------------

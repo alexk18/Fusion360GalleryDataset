@@ -1,130 +1,215 @@
-# Universal CAD DSL — LLM-as-CAD-operator
+# Fusion CAD DSL Backend Contract
 
-This folder implements the two-level "CAD Operator" architecture: **LLM outputs only a high-level Plan or Patch**; all server execution is deterministic (validate → compile → execute). No raw Fusion commands from the LLM.
+This module set implements an MCP-style CAD backend flow:
 
-## File-level change list
+`LLM/agent -> CAD Plan or Patch DSL -> validator -> compiler -> backend tools -> executor -> inspector/fixer`
 
-| File | Purpose |
-|------|--------|
-| **New** `cad/cad_dsl.py` | Plan and Patch JSON schema; `Step`, `Plan`, `Patch`; `make_step_names()`; example plans (tank, plane). |
-| **New** `cad/cad_patch.py` | `apply_patch(plan, patch)` — replace/add/remove by path (e.g. `steps[hull].distance`). |
-| **New** `cad/cad_validate.py` | `validate_plan(plan)` — budget, primitive sanity (rect/circle/poly), fillet/loft/sweep rules. |
-| **New** `cad/cad_compiler.py` | `compile_plan(plan)` → list of `CompiledStep` (add_sketch, draw profile, add_extrude). |
-| **New** `cad/cad_executor.py` | `CadExecutor` — run compiled steps via client; ensure/update semantics; dry-run; registry. |
-| **New** `cad/cad_inspector.py` | Screenshot + plan summary → structured critique `{score, issues[], constraints}` (no coordinates). |
-| **New** `cad/cad_fixer.py` | Inspector issues + current plan → LLM returns **only** a minimal Patch; `post_render_fix_loop` (bounded). |
-| **New** `cad/cad_operator.py` | `run_cad_operator()`, `run_best_of_n_create()`, pre-render fix, post-render Inspector+Fixer. |
-| **New** `examples/cad_dsl_demo.py` | Demo: tank | plane | edit (DRY_RUN=1 for no Fusion). |
-| **New** `test/test_cad_dsl.py` | Unit tests: patch apply, path parse, validation, compiler, executor dry-run. |
-| **Modified** `server/command_sketch_extrusion.py` | Optional `sketch_name` in add_sketch, `feature_name` in add_extrude; `find_entity_by_name`, `update_extrude`. |
-| **Modified** `server/command_runner.py` | Route `find_entity_by_name`, `update_extrude`. |
-| **Modified** `client/fusion360gym_client.py` | `add_sketch(..., sketch_name=)`, `add_extrude(..., feature_name=)`; `find_entity_by_name`, `update_extrude`. |
+The primary system contract is CAD DSL operations, not bounding boxes and not raw Fusion commands.
 
-## Plan JSON schema (create/edit)
+## Current State
 
-```json
-{
-  "units": "cm",
-  "session": "<stable_session_id>",
-  "mode": "create|edit",
-  "budget": {"max_steps": 25, "max_parts": 18},
-  "global": {"origin": "X-centered,Y-back=0,Z-floor=0", "symmetry": "none|approx_x"},
-  "steps": [
-    {
-      "id": "<stable_id>",
-      "op": "ensure",
-      "primitive": "rect_extrude|circle_extrude|poly_extrude|wedge_extrude|cut_extrude|loft|sweep|fillet",
-      "names": {"sketch": "...", "feature": "...", "body": "..."},
-      "plane": "XY|XZ|YZ|XY@z|XZ@y|YZ@x",
-      "profile": {"type": "rect|circle|poly", "cx", "cy", "w", "h" or "radius" or "pts": [{"x","y"}]},
-      "distance": 1.0,
-      "operation": "NewBodyFeatureOperation|JoinFeatureOperation|CutFeatureOperation|IntersectFeatureOperation",
-      "params": {},
-      "selectors": {},
-      "loft": {},
-      "sweep": {},
-      "fillet": {}
-    }
-  ]
-}
-```
+- LLM-facing contract is Plan/Patch DSL (`cad_dsl.py`, `cad_patch.py`).
+- Capability-aware validation is enforced (`cad_validate.py`, `cad_capabilities.py`).
+- Execution uses backend tool surface (`cad_backend.py`) and stateful executor (`cad_executor.py`).
+- Edit mode supports real in-place `update_extrude` for distance change.
+- Unsupported edits are deterministically classified and do not silently pass.
+- Unsupported primitives do not report success in normal execution.
+- Dry-run can report unsupported primitives as stubs without building geometry.
 
-## Patch JSON schema (edit only)
+## Backend Tool Surface
 
-```json
-{
-  "patches": [
-    {"op": "replace", "path": "steps[<id>].distance", "value": 18.0},
-    {"op": "replace", "path": "steps[<id>].profile.pts", "value": [...]},
-    {"op": "add", "path": "steps", "value": { "<full step>" }},
-    {"op": "remove", "path": "steps[<id>]"}
-  ],
-  "intent": "minimal_change"
-}
-```
+Main backend methods (`FusionCadBackend`):
 
-## Example plans
+- `create_sketch`
+- `add_line`
+- `add_arc`
+- `add_circle`
+- `close_profile`
+- `extrude`
+- `cut`
+- `find_entity_by_name`
+- `list_features`
+- `screenshot`
+- `query_bounding_box`
+- `update_extrude`
 
-- **Lowpoly tank**: `cad_dsl.EXAMPLE_PLAN_LOWPOLY_TANK` — wedge hull, poly turret, circle gun, circle wheel.
-- **Lowpoly plane**: `cad_dsl.EXAMPLE_PLAN_LOWPOLY_PLANE` — poly fuselage, poly wing, rect tail.
+Compatibility helper used by compiler profile emission:
 
-## Run instructions
+- `add_point` (legacy helper, not primary external contract)
 
-1. **Environment**: From repo root or `tools/fusion360gym`, ensure `cad` and `client` are on `sys.path` (or run from `fusion360gym` so `cad` is a package).
+Declared extension points (currently unsupported):
 
-2. **Dry-run (no Fusion)**:
-   ```bash
-   set DRY_RUN=1
-   python examples/cad_dsl_demo.py tank
-   python examples/cad_dsl_demo.py plane
-   python examples/cad_dsl_demo.py edit
-   ```
+- `fillet`
+- `chamfer`
+- `revolve`
+- `loft`
+- `sweep`
+- future: edge/face queries, suppress/delete, sketch parameter updates
 
-3. **With Fusion 360**:
-   - Start Fusion 360 and run the add-in (Add-ins → Run).
-   - `set DRY_RUN=0` (or unset).
-   - `python examples/cad_dsl_demo.py tank` (or plane / edit).
-   - Optional: `FUSION_HOST=127.0.0.1`, `FUSION_PORT=8080`.
+## Capability Table
 
-4. **Unit tests**:
-   ```bash
-   cd tools/fusion360gym
-   python test/test_cad_dsl.py
-   ```
+Source: `cad_capabilities.default_capability_model()`
 
-## Verification checklist
+Create:
+- `sketch_rect`: supported
+- `sketch_circle`: supported
+- `sketch_poly`: supported
+- `sketch_arc`: unsupported
+- `profile_close`: supported
+- `extrude_new_body`: supported
+- `extrude_cut`: supported
 
-- [x] **Creation**: Recognizable models beyond rectangles (poly, circle); bounded steps; stable execution.
-- [x] **Editing**: Update existing features by name (`update_extrude`); no `clear()` in edit mode.
-- [x] **Persistence**: Deterministic naming `session__step_id__sk` / `__feat`; `find_entity_by_name` to reattach after restart.
-- [x] **Non-boxy**: rect, circle, poly (wedge) supported; loft/sweep/fillet in DSL and validation, execution stubbed until server supports them.
-- [x] **Demo stability**: Bounded steps/parts; deterministic validation; best-of-N and bounded fix loops in `cad_operator`.
-- [x] **LLM constraint**: LLM outputs only Plan or Patch; all server calls from compiler/executor.
-- [x] **Dry-run**: `CadExecutor(dry_run=True)` prints compiled calls without Fusion.
-- [x] **Tests**: Patch apply, path parse, validation, compiler, executor dry-run.
+Edit:
+- `update_extrude_distance`: supported
+- `sketch_edit_existing`: partial
+- `suppress_feature`: unsupported
+- `delete_feature`: unsupported
 
-## Loft / sweep / fillet
+Query:
+- `find_entity_by_name`: supported
+- `list_features`: supported
+- `screenshot`: supported
+- `bbox_query`: supported
+- `edge_query`: unsupported
+- `face_query`: unsupported
 
-Defined in the DSL and validated; **execution is stubbed** (compiler returns empty calls, executor skips). To enable:
+Advanced primitives:
+- `fillet`: unsupported
+- `chamfer`: unsupported
+- `revolve`: unsupported
+- `loft`: unsupported
+- `sweep`: unsupported
 
-- Server: implement `add_loft`, `add_sweep`, `add_fillet` (rule-based edge selection) and optional `update_*`.
-- Compiler: emit corresponding calls in `_compile_step` for `loft`, `sweep`, `fillet`.
-- Executor: handle those commands and resolve profile/path refs.
+## Supported Create Operations
 
-## Risks and mitigations
+- `rect_extrude`
+- `circle_extrude`
+- `poly_extrude`
+- `wedge_extrude`
+- `cut_extrude`
 
-- **A — Unique names / wrong sketch**: Naming uses `session__step_id__sk` (and `__feat`). `find_entity_by_name` returns `found` and `count`; if `count > 1` the server returns **failure** (deterministic; request rename).
-- **B — update_extrude extent type**: Server checks `extentOne` is `DistanceExtentDefinition`; otherwise returns "unsupported extrude extent type". After update, `design_state.refresh()` is called. **Negative distance** is rejected (server and validator).
-- **C — add_sketch ensure**: If `sketch_name` is passed, server first looks up existing sketch by name; if found, returns it **without creating** a new one (no duplicate names).
-- **D — Sketch state**: `CommandSketchExtrusion.state` is keyed by sketch name; when returning an existing sketch we do **not** reset state. Edit only via **update_extrude** (distance, etc.); do not append geometry to existing sketches until "replace sketch geometry" or equivalent exists.
+## Supported In-Place Edit Operations
 
-## Integration with ai_assistant.py
+- Existing extrude distance update:
+  - detect existing feature by stable name
+  - call `update_extrude(feature_name, new_distance)`
+  - update registry and trace with action `updated`
 
-To use the DSL path from the main assistant:
+No `clear()` is used in edit mode.
 
-1. Add a "create_dsl" or "dsl" command that accepts text (and optional images).
-2. Call an LLM to produce a **Plan** (not bboxes); optionally generate N candidates and use `run_best_of_n_create`.
-3. Run `validate_plan` → `run_cad_operator` (or `CadExecutor.execute_plan`).
-4. Optionally run the post-render Inspector + Fixer loop (bounded).
+## Recreate-Required Operations
 
-The existing bbox path (Architect → encode_bboxes_to_plan → execute_plan) remains unchanged; the DSL path is additive.
+Detected by `classify_edit_change(step_before, step_after)` in `cad_executor.py`.
+
+Current deterministic recreate-required cases:
+
+- plane change
+- operation change
+- profile geometry change (rect/circle/poly)
+- feature-name change
+
+Current behavior for recreate-required:
+
+- fail-fast with action `recreate-required`
+- no silent skip
+- no fake success
+
+## Unsupported Operations
+
+Normal execution (non dry-run) fails for:
+
+- `loft`
+- `sweep`
+- `fillet`
+- `chamfer`
+- `revolve`
+
+Unsupported primitive result is explicit (`action=unsupported`, `success=False`).
+
+## Arcs Status
+
+Arcs are not supported in current execution path.
+
+- Poly profile with `profile.arcs` is rejected by validator.
+- Compiler emits straight segments only.
+- Arc-related fields are never silently ignored.
+
+## Dry-Run Semantics
+
+- Dry-run executes deterministic compile/executor flow without Fusion geometry mutation.
+- Unsupported primitives can be emitted as stubs:
+  - trace action: `unsupported`
+  - reason includes `dry-run stub; no geometry built`
+- This is not treated as built geometry.
+
+## No Fake Success Policy
+
+- Unsupported primitives cannot pass as successful build in normal mode.
+- Unsupported in-place edits cannot pass as successful update.
+- Duplicate entity-name lookup errors propagate as failures.
+- Capability rejection reports explicit reason.
+
+## add_sketch Contract
+
+`add_sketch` with an existing `sketch_name` uses existing sketch as authoritative.
+
+- Existing sketch is returned.
+- Requested `sketch_plane` is informational and does not remap existing sketch plane.
+- Edit path should update feature via `update_extrude`; not append profile geometry blindly.
+
+## Observability Contract
+
+`ExecutionResult.trace` records:
+
+- compiled step id
+- primitive
+- action: `created | updated | recreate-required | unsupported | failed`
+- backend command path
+- reason (validation/capability/update failure details)
+
+Post-render patch application is logged by operator trace with backend path:
+
+- `post_render_patch_application`
+
+## Text-to-CAD and Image-to-CAD Convergence
+
+Integration contract (prepared architecture):
+
+`images/text -> interpretation -> structural representation -> CAD planning -> validation -> execution`
+
+Module: `cad_multimodal.py`
+
+- `text_to_cad_plan(...)`
+- `image_to_cad_plan(...)`
+- `StructuralObjectRepresentation`
+- `CadPlanner` interface
+
+Legacy adapter:
+
+- `structural_from_legacy_bboxes(...)`
+- marked as fallback bridge only
+
+Important: text and image paths are expected to converge into one CAD DSL execution path.
+
+## Legacy BBox Path
+
+BBox-based encoding may remain as temporary fallback in legacy scripts.
+It is not the primary internal truth for the CAD backend contract.
+
+## Test Coverage Notes
+
+`test/test_cad_dsl.py` covers:
+
+- supported create path
+- in-place extrude update path
+- no silent skip in edit
+- deterministic unsupported/recreate-required detection
+- unsupported primitive behavior in normal run
+- dry-run unsupported stub behavior
+- add_sketch contract behavior
+- duplicate-name error propagation
+- capability-aware validation rejection
+- arcs rejection
+- registry update on create and update
+- no clear in edit mode
+- documentation contract presence checks

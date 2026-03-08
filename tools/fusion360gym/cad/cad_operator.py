@@ -14,10 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 from .cad_dsl import default_budget
 from .cad_validate import validate_plan, ValidationResult
 from .cad_compiler import compile_plan
-from .cad_executor import CadExecutor, ExecutionResult
+from .cad_executor import CadExecutor, ExecutionResult, ExecutionTraceEvent
 from .cad_patch import apply_patch
 from .cad_inspector import plan_summary_for_inspector, run_inspector
 from .cad_fixer import run_fixer
+from .cad_capabilities import CapabilityModel, default_capability_model
 
 
 def select_best_candidate(
@@ -44,6 +45,8 @@ def pre_render_fix(
     validation_result: ValidationResult,
     call_llm: Callable[[str, str], str],
     max_iterations: int = 1,
+    capabilities: Optional[CapabilityModel] = None,
+    allow_unsupported: bool = False,
 ) -> Dict[str, Any]:
     """Optional fixer for run_best_of_n_create: (plan, vr, call_llm) -> fixed plan."""
     """
@@ -69,7 +72,11 @@ def pre_render_fix(
         if not patch or not patch.get("patches"):
             return current
         current = apply_patch(current, patch)
-        validation_result = validate_plan(current)
+        validation_result = validate_plan(
+            current,
+            capabilities=capabilities,
+            allow_unsupported=allow_unsupported,
+        )
     return current
 
 
@@ -86,18 +93,29 @@ def run_cad_operator(
     call_llm_with_image: Optional[Callable[..., str]] = None,
     call_llm: Optional[Callable[[str, str], str]] = None,
     max_post_fix_iterations: int = 2,
+    capabilities: Optional[CapabilityModel] = None,
 ) -> ExecutionResult:
     """
     Validate plan, compile, execute. Optionally run post-render Inspector+Fixer loop.
     Never calls clear().
     """
-    vr = validate_plan(plan)
+    cap_model = capabilities or default_capability_model()
+    vr = validate_plan(plan, capabilities=cap_model, allow_unsupported=dry_run)
     if not vr.valid:
         return ExecutionResult(
             success=False,
             steps_ok=0,
             steps_total=0,
             message="Validation failed: " + "; ".join(vr.errors[:5]),
+            trace=[
+                ExecutionTraceEvent(
+                    step_id="validation",
+                    primitive="plan",
+                    action="failed",
+                    backend_path=[],
+                    reason="; ".join(vr.errors[:5]),
+                )
+            ],
         )
     session = plan.get("session") or "session"
     mode = (plan.get("mode") or "create").strip().lower()
@@ -108,6 +126,7 @@ def run_cad_operator(
         step_delay=step_delay,
         edit_mode=is_edit,
         session_id=session,
+        capabilities=cap_model,
     )
     result = executor.execute_plan(plan)
     if not result.success or not run_post_render_fix or dry_run:
@@ -123,8 +142,26 @@ def run_cad_operator(
         patch = run_fixer(plan, inspector_out, call_llm)
         if not patch or not patch.get("patches"):
             break
+        result.trace.append(
+            ExecutionTraceEvent(
+                step_id="post_render",
+                primitive="patch",
+                action="updated",
+                backend_path=["post_render_patch_application"],
+                reason=f"patch_ops={len(patch.get('patches') or [])}",
+            )
+        )
         plan = apply_patch(plan, patch)
-        if not validate_plan(plan).valid:
+        if not validate_plan(plan, capabilities=cap_model, allow_unsupported=dry_run).valid:
+            result.trace.append(
+                ExecutionTraceEvent(
+                    step_id="post_render",
+                    primitive="patch",
+                    action="failed",
+                    backend_path=["validation"],
+                    reason="post-render patch validation failed",
+                )
+            )
             break
         result = executor.execute_plan(plan)
     return result
@@ -138,22 +175,30 @@ def run_best_of_n_create(
     step_delay: float = 0.4,
     pre_render_fix_fn: Optional[Callable[..., Dict]] = None,
     call_llm: Optional[Callable[[str, str], str]] = None,
+    capabilities: Optional[CapabilityModel] = None,
 ) -> tuple[int, Dict[str, Any], ExecutionResult]:
     """
     Validate all candidates, optionally pre-render fix, select best, execute only the best.
     Returns (best_index, best_plan, execution_result).
     """
-    validation_results = [validate_plan(p) for p in candidates]
+    cap_model = capabilities or default_capability_model()
+    validation_results = [validate_plan(p, capabilities=cap_model, allow_unsupported=dry_run) for p in candidates]
     if pre_render_fix_fn and call_llm:
         fixed = []
         for i, p in enumerate(candidates):
             fixed.append(pre_render_fix_fn(p, validation_results[i], call_llm))
         candidates = fixed
-        validation_results = [validate_plan(p) for p in candidates]
+        validation_results = [validate_plan(p, capabilities=cap_model, allow_unsupported=dry_run) for p in candidates]
     best_idx = select_best_candidate(candidates, validation_results)
     if best_idx < 0:
         return -1, {}, ExecutionResult(success=False, steps_ok=0, steps_total=0, message="No valid candidate")
     best_plan = candidates[best_idx]
-    executor = CadExecutor(client, dry_run=dry_run, step_delay=step_delay, edit_mode=False)
+    executor = CadExecutor(
+        client,
+        dry_run=dry_run,
+        step_delay=step_delay,
+        edit_mode=False,
+        capabilities=cap_model,
+    )
     result = executor.execute_plan(best_plan)
     return best_idx, best_plan, result

@@ -34,6 +34,8 @@ PRIMITIVES = [
     "loft",
     "sweep",
     "fillet",
+    "chamfer",
+    "revolve",
 ]
 
 # Plan planes
@@ -298,7 +300,6 @@ EXAMPLE_PLAN_LOWPOLY_PLANE = {
                     {"x": 14, "y": 3},
                     {"x": -14, "y": 3},
                 ],
-                "arcs": [{"i_start": 1, "i_end": 2, "angle_deg": 15}],
             },
             "distance": 1.5,
             "operation": "JoinFeatureOperation",

@@ -1,8 +1,9 @@
-"""
+﻿"""
 Deterministic validation of a CAD DSL Plan before execution.
 
 - Budget: max_steps, max_parts
 - Primitive sanity: rect/circle/poly dimensions, min sizes
+- Capability-aware validation: reject unavailable backend capabilities
 - Plan-level: coordinate convention, connectivity heuristic (optional)
 - Loft/sweep/fillet: profile existence, radius clamp for fillet
 """
@@ -18,6 +19,11 @@ from .cad_dsl import (
     EXTRUDE_OPERATIONS,
     FILLET_RULES,
     default_budget,
+)
+from .cad_capabilities import (
+    CapabilityModel,
+    default_capability_model,
+    capability_required_for_primitive,
 )
 
 
@@ -74,10 +80,18 @@ def _normalize_plane(plane: Any) -> Tuple[str, float]:
     return "XY", 0.0
 
 
-def _validate_profile(step_id: str, profile: Dict[str, Any], result: ValidationResult) -> bool:
+def _validate_profile(
+    step_id: str,
+    profile: Dict[str, Any],
+    result: ValidationResult,
+    capabilities: CapabilityModel,
+) -> bool:
     """Validate profile rect/circle/poly. Return True if ok."""
     ptype = (profile.get("type") or "rect").strip().lower()
     if ptype == "rect":
+        if not capabilities.supports("sketch_rect"):
+            result.add_error(f"Step {step_id}: sketch_rect capability unavailable")
+            return False
         w = float(profile.get("w", 0))
         h = float(profile.get("h", 0))
         if w < MIN_RECT_SIZE or h < MIN_RECT_SIZE:
@@ -85,12 +99,25 @@ def _validate_profile(step_id: str, profile: Dict[str, Any], result: ValidationR
             return False
         return True
     if ptype == "circle":
+        if not capabilities.supports("sketch_circle"):
+            result.add_error(f"Step {step_id}: sketch_circle capability unavailable")
+            return False
         r = float(profile.get("radius", 0))
         if r < MIN_CIRCLE_RADIUS:
             result.add_error(f"Step {step_id}: circle radius must be >= {MIN_CIRCLE_RADIUS}")
             return False
         return True
     if ptype == "poly":
+        if not capabilities.supports("sketch_poly"):
+            result.add_error(f"Step {step_id}: sketch_poly capability unavailable")
+            return False
+        arcs = profile.get("arcs") or []
+        if arcs:
+            if not capabilities.supports("sketch_arc"):
+                result.add_error(f"Step {step_id}: arcs not supported; use straight poly segments only")
+            else:
+                result.add_error(f"Step {step_id}: arcs not supported by compiler; use straight poly segments only")
+            return False
         pts = profile.get("pts") or []
         if len(pts) < MIN_POLY_POINTS:
             result.add_error(f"Step {step_id}: poly must have >= {MIN_POLY_POINTS} points")
@@ -114,21 +141,48 @@ def _validate_profile(step_id: str, profile: Dict[str, Any], result: ValidationR
     return False
 
 
-def _validate_step(step: Dict[str, Any], step_index: int, result: ValidationResult) -> None:
+def _validate_step(
+    step: Dict[str, Any],
+    step_index: int,
+    result: ValidationResult,
+    capabilities: CapabilityModel,
+    allow_unsupported: bool,
+) -> None:
     """Validate one step."""
     step_id = step.get("id") or f"step_{step_index}"
     prim = (step.get("primitive") or "").strip().lower()
     if prim not in PRIMITIVES:
         result.add_error(f"Step {step_id}: unknown primitive '{prim}'")
         return
+
     op = (step.get("op") or "ensure").strip().lower()
     if op not in ("ensure", "create", "update"):
         result.add_warning(f"Step {step_id}: op '{op}' normalized to 'ensure'")
+
     operation = step.get("operation")
     if operation and operation not in EXTRUDE_OPERATIONS:
         result.add_error(f"Step {step_id}: invalid operation '{operation}'")
+
+    required_cap = capability_required_for_primitive(prim, operation or "")
+    if required_cap == "unsupported":
+        msg = f"Step {step_id}: unsupported primitive '{prim}'"
+        if allow_unsupported:
+            result.add_warning(msg)
+        else:
+            result.add_error(msg)
+        return
+
+    if not capabilities.supports(required_cap):
+        msg = f"Step {step_id}: capability '{required_cap}' unavailable ({capabilities.reason(required_cap)})"
+        if allow_unsupported:
+            result.add_warning(msg)
+        else:
+            result.add_error(msg)
+            return
+
     plane = step.get("plane", "XY")
     _normalize_plane(plane)
+
     distance = step.get("distance")
     if distance is not None:
         d = float(distance)
@@ -138,9 +192,11 @@ def _validate_step(step: Dict[str, Any], step_index: int, result: ValidationResu
             result.add_error(f"Step {step_id}: distance must be >= {MIN_DISTANCE}")
         if d > MAX_DISTANCE:
             result.add_warning(f"Step {step_id}: distance clamped to {MAX_DISTANCE}")
+
     profile = step.get("profile") or {}
     if prim in ("rect_extrude", "circle_extrude", "poly_extrude", "wedge_extrude", "cut_extrude"):
-        _validate_profile(step_id, profile, result)
+        _validate_profile(step_id, profile, result, capabilities)
+
     if prim == "fillet":
         fillet = step.get("fillet") or {}
         radius = fillet.get("radius")
@@ -152,34 +208,57 @@ def _validate_step(step: Dict[str, Any], step_index: int, result: ValidationResu
         rule = selectors.get("rule")
         if rule and rule not in FILLET_RULES:
             result.add_warning(f"Step {step_id}: unknown fillet rule '{rule}'")
+
     if prim == "loft":
         loft = step.get("loft") or {}
         profiles_list = loft.get("profiles") or []
         if len(profiles_list) < 2:
             result.add_error(f"Step {step_id}: loft requires at least 2 profiles")
+
     if prim == "sweep":
         sweep = step.get("sweep") or {}
         if not sweep.get("profile_ref") or not sweep.get("path_ref"):
             result.add_error(f"Step {step_id}: sweep requires profile_ref and path_ref")
 
+    if prim == "chamfer":
+        chamfer = step.get("chamfer") or {}
+        distance = chamfer.get("distance")
+        if distance is not None and float(distance) <= 0:
+            result.add_error(f"Step {step_id}: chamfer distance must be > 0")
 
-def validate_plan(plan: Dict[str, Any]) -> ValidationResult:
+    if prim == "revolve":
+        revolve = step.get("revolve") or {}
+        if not revolve.get("axis_ref"):
+            result.add_warning(f"Step {step_id}: revolve axis_ref is missing")
+
+
+def validate_plan(
+    plan: Dict[str, Any],
+    *,
+    capabilities: Optional[CapabilityModel] = None,
+    allow_unsupported: bool = False,
+) -> ValidationResult:
     """
     Deterministic validation of a full Plan.
     Returns ValidationResult(valid, errors, warnings).
     """
     result = ValidationResult(valid=True)
+    cap = capabilities or default_capability_model()
+
     if not plan:
         result.add_error("Plan is empty")
         return result
+
     budget = plan.get("budget") or default_budget()
     max_steps = int(budget.get("max_steps", 25))
     max_parts = int(budget.get("max_parts", 18))
     steps = plan.get("steps") or []
+
     if len(steps) > max_steps:
         result.add_error(f"Plan has {len(steps)} steps, max allowed is {max_steps}")
     if len(steps) > max_parts:
         result.add_warning(f"Plan has {len(steps)} parts, budget max_parts is {max_parts}")
+
     seen_ids = set()
     for i, step in enumerate(steps):
         if not step:
@@ -190,5 +269,6 @@ def validate_plan(plan: Dict[str, Any]) -> ValidationResult:
             if sid in seen_ids:
                 result.add_error(f"Duplicate step id: {sid}")
             seen_ids.add(sid)
-        _validate_step(step, i, result)
+        _validate_step(step, i, result, cap, allow_unsupported)
+
     return result

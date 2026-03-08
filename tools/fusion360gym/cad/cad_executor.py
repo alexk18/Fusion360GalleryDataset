@@ -1,23 +1,188 @@
 """
-Stateful executor: run compiled plan against Fusion client with ensure/update semantics.
+Stateful executor: run compiled CAD DSL plan via capability-aware backend contract.
 
-- In create mode: run all compiled steps; never call clear().
-- In edit mode: for each step, if feature exists by name -> skip create (or later: update_extrude); else create.
-- Edit policy (Risk D): Only update existing features via update_extrude (distance etc.). Do not "add to"
-  existing sketches (add_point/add_line on an existing sketch would use server state that may be
-  inconsistent). To change geometry, use a new sketch/feature with a new name; old feature suppress/delete
-  is a future option.
-- Maintains registry: step_id -> {sketch_name, feature_name, body_name, last_profile_id, ...}.
-- Dry-run: print compiled calls only, no client calls.
+Semantics:
+- No direct raw Fusion commands from LLM output.
+- In edit mode existing feature is updated only via update_extrude when edit is in-place editable.
+- Unsupported in-place edits are deterministically classified as recreate-required or unsupported.
+- No fake success for unsupported primitives in normal execution.
+- Dry-run may emit unsupported primitives as stubbed (not built geometry).
+- clear() is never called.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from .cad_compiler import compile_plan, CompiledStep, CompiledCall
+from .cad_backend import FusionCadBackend
+from .cad_capabilities import (
+    CapabilityModel,
+    capability_required_for_primitive,
+    default_capability_model,
+)
+from .cad_compiler import CompiledStep, compile_plan
+
+
+EDIT_IN_PLACE_EDITABLE = "in_place_editable"
+EDIT_RECREATE_REQUIRED = "recreate_required"
+EDIT_UNSUPPORTED = "unsupported_change"
+
+EXTRUDE_PRIMITIVES = (
+    "rect_extrude",
+    "circle_extrude",
+    "poly_extrude",
+    "wedge_extrude",
+    "cut_extrude",
+)
+
+UNSUPPORTED_EXECUTION_PRIMITIVES = ("loft", "sweep", "fillet", "chamfer", "revolve")
+
+
+@dataclass
+class EditChangeDecision:
+    classification: str
+    reason: str = ""
+
+
+def _normalize_plane(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _normalize_name(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _profile_signature(profile: Dict[str, Any]) -> Tuple[Tuple[Any, ...], Optional[str]]:
+    profile = profile or {}
+    ptype = str(profile.get("type") or "").strip().lower()
+    if ptype in ("", "rect"):
+        return (
+            (
+                "rect",
+                float(profile.get("w", 0.0)),
+                float(profile.get("h", 0.0)),
+                float(profile.get("cx", 0.0)),
+                float(profile.get("cy", 0.0)),
+            ),
+            None,
+        )
+    if ptype == "circle":
+        return (
+            (
+                "circle",
+                float(profile.get("radius", 0.0)),
+                float(profile.get("cx", 0.0)),
+                float(profile.get("cy", 0.0)),
+            ),
+            None,
+        )
+    if ptype == "poly":
+        pts = tuple((float(p.get("x", 0.0)), float(p.get("y", 0.0))) for p in (profile.get("pts") or []))
+        arcs = tuple(
+            (
+                int(a.get("i_start", -1)),
+                int(a.get("i_end", -1)),
+                float(a.get("angle_deg", 0.0)),
+            )
+            for a in (profile.get("arcs") or [])
+        )
+        if arcs:
+            return (("poly", pts, arcs), "poly profile arcs are unsupported in current backend")
+        return (("poly", pts), None)
+    return ((ptype,), f"unsupported profile type: {ptype!r}")
+
+
+def classify_edit_change(step_before: Dict[str, Any], step_after: Dict[str, Any]) -> EditChangeDecision:
+    """
+    Classify change between previous and new step:
+    - in_place_editable: only distance (or no geometry-affecting change)
+    - recreate_required: plane/operation/profile/name changed
+    - unsupported_change: primitive/profile unsupported for comparison
+    """
+    before = step_before or {}
+    after = step_after or {}
+
+    primitive_before = str(before.get("primitive") or "").strip().lower()
+    primitive_after = str(after.get("primitive") or "").strip().lower()
+    if not primitive_before and primitive_after:
+        primitive_before = primitive_after
+    if not primitive_after and primitive_before:
+        primitive_after = primitive_before
+    if not primitive_before and not primitive_after:
+        primitive_before = "rect_extrude"
+        primitive_after = "rect_extrude"
+    if primitive_before != primitive_after:
+        return EditChangeDecision(
+            EDIT_UNSUPPORTED,
+            "changing primitive type in-place is unsupported",
+        )
+    if primitive_after not in EXTRUDE_PRIMITIVES:
+        return EditChangeDecision(
+            EDIT_UNSUPPORTED,
+            f"in-place edit is unsupported for primitive {primitive_after!r}",
+        )
+    if _normalize_plane(before.get("plane")) != _normalize_plane(after.get("plane")):
+        return EditChangeDecision(
+            EDIT_RECREATE_REQUIRED,
+            "plane change is not in-place editable",
+        )
+    if _normalize_name(before.get("operation")) != _normalize_name(after.get("operation")):
+        return EditChangeDecision(
+            EDIT_RECREATE_REQUIRED,
+            "operation change is not in-place editable",
+        )
+    before_profile, before_profile_reason = _profile_signature(before.get("profile") or {})
+    after_profile, after_profile_reason = _profile_signature(after.get("profile") or {})
+    if before_profile_reason or after_profile_reason:
+        reason = before_profile_reason or after_profile_reason or "unsupported profile change"
+        return EditChangeDecision(EDIT_UNSUPPORTED, reason)
+    if before_profile != after_profile:
+        return EditChangeDecision(
+            EDIT_RECREATE_REQUIRED,
+            "profile geometry change is not in-place editable",
+        )
+    names_before = before.get("names") or {}
+    names_after = after.get("names") or {}
+    if _normalize_name(names_before.get("feature")) != _normalize_name(names_after.get("feature")):
+        return EditChangeDecision(
+            EDIT_RECREATE_REQUIRED,
+            "feature name change requires recreate path",
+        )
+    return EditChangeDecision(EDIT_IN_PLACE_EDITABLE, "")
+
+
+def detect_unsupported_edit(step_before: Dict[str, Any], step_after: Dict[str, Any]) -> Tuple[bool, str]:
+    """
+    Backward-compatible helper for tests/callers.
+    Returns (supported, reason), where supported=True means in-place editable.
+    """
+    decision = classify_edit_change(step_before, step_after)
+    return (decision.classification == EDIT_IN_PLACE_EDITABLE, decision.reason)
+
+
+def _get_distance_from_compiled_step(compiled: CompiledStep) -> float:
+    for call in compiled.calls:
+        if call.command == "add_extrude":
+            return float(call.data.get("distance", 1.0))
+    return 1.0
+
+
+def _get_feature_name_from_compiled_step(compiled: CompiledStep) -> Optional[str]:
+    for call in compiled.calls:
+        if call.command == "add_extrude":
+            return _normalize_name(call.data.get("feature_name")) or None
+    return None
+
+
+@dataclass
+class ExecutionTraceEvent:
+    step_id: str
+    primitive: str
+    action: str
+    backend_path: List[str] = field(default_factory=list)
+    reason: str = ""
 
 
 @dataclass
@@ -27,59 +192,78 @@ class ExecutionResult:
     steps_total: int = 0
     message: str = ""
     registry: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    trace: List[ExecutionTraceEvent] = field(default_factory=list)
 
 
 def _resolve_data(data: Dict[str, Any], refs: Dict[str, Any]) -> Dict[str, Any]:
-    """Replace __ref:key with refs[key] in data (shallow)."""
-    out = {}
-    for k, v in data.items():
-        if isinstance(v, str) and v.startswith("__ref:"):
-            key = v[6:]
-            out[k] = refs.get(key)
-        elif isinstance(v, dict):
-            out[k] = _resolve_data(v, refs)
+    out: Dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, str) and value.startswith("__ref:"):
+            out[key] = refs.get(value[6:])
+        elif isinstance(value, dict):
+            out[key] = _resolve_data(value, refs)
         else:
-            out[k] = v
+            out[key] = value
     return out
 
 
-def _get_profile_id_from_response(response: Any) -> Optional[str]:
-    """Extract first profile id from client response (data.profiles dict)."""
+def _response_status_code(response: Any) -> int:
     if response is None:
-        return None
-    try:
-        if hasattr(response, "json"):
+        return 0
+    if hasattr(response, "status_code"):
+        try:
+            return int(getattr(response, "status_code"))
+        except Exception:
+            return 0
+    if isinstance(response, dict):
+        status = response.get("status")
+        if isinstance(status, int):
+            return status
+    return 200
+
+
+def _response_json(response: Any) -> Dict[str, Any]:
+    if response is None:
+        return {}
+    if isinstance(response, dict):
+        return response
+    if hasattr(response, "json"):
+        try:
             body = response.json()
-        else:
-            body = response
-        data = (body or {}).get("data") or {}
-        profiles = data.get("profiles") or {}
-        if profiles:
-            return next(iter(profiles))
-    except Exception:
-        pass
+            if isinstance(body, dict):
+                return body
+        except Exception:
+            return {}
+    return {}
+
+
+def _response_error_message(response: Any) -> str:
+    body = _response_json(response)
+    message = body.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    if response is None:
+        return "no response"
+    return "command failed"
+
+
+def _get_profile_id_from_response(response: Any) -> Optional[str]:
+    body = _response_json(response)
+    data = body.get("data") or {}
+    profiles = data.get("profiles") or {}
+    if profiles:
+        return next(iter(profiles))
     return None
 
 
 def _get_sketch_name_from_response(response: Any) -> Optional[str]:
-    try:
-        if hasattr(response, "json"):
-            body = response.json()
-        else:
-            body = response
-        data = (body or {}).get("data") or {}
-        return data.get("sketch_name")
-    except Exception:
-        pass
-    return None
+    body = _response_json(response)
+    data = body.get("data") or {}
+    name = data.get("sketch_name")
+    return name if isinstance(name, str) and name.strip() else None
 
 
 class CadExecutor:
-    """
-    Executes compiled plan via a Fusion client (send_command or method calls).
-    client_interface: object with send_command(command, data) returning response with .status_code and .json().
-    """
-
     def __init__(
         self,
         client: Any,
@@ -87,192 +271,169 @@ class CadExecutor:
         step_delay: float = 0.4,
         edit_mode: bool = False,
         session_id: Optional[str] = None,
+        capabilities: Optional[CapabilityModel] = None,
     ):
         self.client = client
         self.dry_run = dry_run
         self.step_delay = step_delay
         self.edit_mode = edit_mode
         self.session_id = session_id or ""
+        self.capabilities = capabilities or default_capability_model()
+        self.backend = FusionCadBackend(client, capabilities=self.capabilities)
         self.registry: Dict[str, Dict[str, Any]] = {}
+        self.trace: List[ExecutionTraceEvent] = []
+        self._last_step_error = ""
+        self._last_step_backend_path: List[str] = []
 
-    def _send(self, command: str, data: Optional[Dict] = None):
-        if self.dry_run:
-            return type("Resp", (), {"status_code": 200, "json": lambda: {"data": {}}})()
-
-        if data is None:
-            data = {}
-        if hasattr(self.client, "send_command"):
-            return self.client.send_command(command, data)
-        return self.client.send_command(command, data)
-
-    def _add_sketch(self, data: Dict) -> Any:
-        sketch_plane = data.get("sketch_plane", "XY")
-        sketch_name = data.get("sketch_name")
-        if hasattr(self.client, "add_sketch"):
-            return self.client.add_sketch(sketch_plane, sketch_name=sketch_name)
-        payload = {"sketch_plane": sketch_plane}
-        if sketch_name:
-            payload["sketch_name"] = sketch_name
-        return self._send("add_sketch", payload)
-
-    def _add_point(self, sketch_name: str, pt: Dict) -> Any:
-        if hasattr(self.client, "add_point"):
-            return self.client.add_point(sketch_name, pt)
-        return self._send("add_point", {"sketch_name": sketch_name, "pt": pt})
-
-    def _add_line(self, sketch_name: str, pt1: Dict, pt2: Dict) -> Any:
-        if hasattr(self.client, "add_line"):
-            return self.client.add_line(sketch_name, pt1, pt2)
-        return self._send("add_line", {"sketch_name": sketch_name, "pt1": pt1, "pt2": pt2})
-
-    def _add_circle(self, sketch_name: str, pt: Dict, radius: float) -> Any:
-        if hasattr(self.client, "add_circle"):
-            return self.client.add_circle(sketch_name, pt, radius)
-        return self._send("add_circle", {"sketch_name": sketch_name, "pt": pt, "radius": radius})
-
-    def _close_profile(self, sketch_name: str) -> Any:
-        if hasattr(self.client, "close_profile"):
-            return self.client.close_profile(sketch_name)
-        return self._send("close_profile", {"sketch_name": sketch_name})
-
-    def _add_extrude(
+    def _record_trace(
         self,
-        sketch_name: str,
-        profile_id: str,
-        distance: float,
-        operation: str,
-        feature_name: Optional[str] = None,
-    ) -> Any:
-        if hasattr(self.client, "add_extrude"):
-            return self.client.add_extrude(
-                sketch_name, profile_id, distance, operation, feature_name=feature_name
+        *,
+        step_id: str,
+        primitive: str,
+        action: str,
+        backend_path: Optional[List[str]] = None,
+        reason: str = "",
+    ) -> None:
+        self.trace.append(
+            ExecutionTraceEvent(
+                step_id=step_id,
+                primitive=primitive,
+                action=action,
+                backend_path=list(backend_path or []),
+                reason=reason,
             )
-        payload = {
-            "sketch_name": sketch_name,
-            "profile_id": profile_id,
-            "distance": distance,
-            "operation": operation,
-        }
-        if feature_name:
-            payload["feature_name"] = feature_name
-        return self._send("add_extrude", payload)
+        )
 
-    def _find_feature_by_name(self, name: str) -> tuple[bool, Optional[str]]:
-        """Check if feature exists by name. Returns (found, error_message).
-        If server returns failure (e.g. duplicate name), returns (False, message) so caller can fail deterministically."""
+    def _feature_lookup(self, feature_name: str) -> Tuple[bool, Optional[str], List[str]]:
+        path = ["find_entity_by_name"]
         if self.dry_run:
-            return (name in (r.get("feature_name") for r in self.registry.values()), None)
-        if hasattr(self.client, "send_command"):
-            r = self._send("find_entity_by_name", {"type": "ExtrudeFeature", "name": name})
-            if r is None:
-                return (False, None)
-            code = getattr(r, "status_code", 0)
-            try:
-                body = r.json() if hasattr(r, "json") else {}
-                msg = (body.get("message") or "") if isinstance(body, dict) else ""
-            except Exception:
-                msg = ""
-            if code != 200:
-                return (False, msg or f"find_entity_by_name failed ({code})")
-            data = (body.get("data") or {}) if isinstance(body, dict) else {}
-            found = data.get("found", False)
-            count = data.get("count", 0)
-            if count > 1:
-                return (False, data.get("message") or f"Duplicate feature name: {name} (count={count})")
-            return (found, None)
-        return (False, None)
+            found = feature_name in (entry.get("feature_name") for entry in self.registry.values())
+            return (found, None, path)
+        result = self.backend.find_entity_by_name("ExtrudeFeature", feature_name)
+        if not result.ok:
+            return (False, result.reason or "find_entity_by_name failed", path)
+        response = result.response
+        code = _response_status_code(response)
+        body = _response_json(response)
+        if code != 200:
+            return (False, _response_error_message(response), path)
+        data = body.get("data") or {}
+        count = int(data.get("count", 0) or 0)
+        if count > 1:
+            return (
+                False,
+                data.get("message")
+                or f"Duplicate entity name: '{feature_name}' found {count} times. Rename to ensure uniqueness.",
+                path,
+            )
+        return (bool(data.get("found", False)), None, path)
 
-    def _update_extrude(self, feature_name: str, distance: float) -> Any:
+    def _update_feature_distance(self, feature_name: str, distance: float) -> Tuple[bool, str, List[str]]:
+        path = ["update_extrude"]
         if self.dry_run:
-            return type("Resp", (), {"status_code": 200})()
-        if hasattr(self.client, "send_command"):
-            return self._send("update_extrude", {"feature_name": feature_name, "distance": distance})
-        return None
+            return (True, "", path)
+        result = self.backend.update_extrude(feature_name, distance)
+        if not result.ok:
+            return (False, result.reason or "update_extrude capability rejection", path)
+        response = result.response
+        if _response_status_code(response) != 200:
+            return (False, _response_error_message(response), path)
+        return (True, "", path)
 
-    def execute_compiled_step(self, compiled: CompiledStep, plan_session: str) -> bool:
-        """Execute one CompiledStep. Returns True if step succeeded."""
+    def _check_capability_for_step(self, step_id: str, primitive: str, operation: str) -> Tuple[bool, str]:
+        required = capability_required_for_primitive(primitive, operation)
+        if required == "unsupported":
+            return (False, f"unsupported primitive '{primitive}'")
+        if not self.capabilities.supports(required):
+            return (
+                False,
+                f"capability '{required}' unavailable: {self.capabilities.reason(required)}",
+            )
+        return (True, "")
+
+    def execute_compiled_step(self, compiled: CompiledStep, _plan_session: str) -> bool:
+        self._last_step_error = ""
+        self._last_step_backend_path = []
         refs: Dict[str, Any] = {}
-        last_profile_id: Optional[str] = None
         sketch_name: Optional[str] = None
-        feature_name = (compiled.calls[-1].data.get("feature_name") if compiled.calls else None) or ""
+        last_profile_id: Optional[str] = None
 
-        if compiled.primitive in ("loft", "sweep", "fillet"):
+        for call in compiled.calls:
+            self._last_step_backend_path.append(call.command)
+            data = _resolve_data(dict(call.data), refs)
             if self.dry_run:
-                print(f"  [dry-run] skip unsupported primitive: {compiled.primitive}")
-            return True
-
-        for i, call in enumerate(compiled.calls):
-            if self.dry_run:
-                print(f"  [dry-run] {call.command} {call.data}")
+                print(f"  [dry-run] {call.command} {data}")
+                if call.command == "add_sketch":
+                    refs["sketch_name"] = data.get("sketch_name")
+                if call.command in ("add_point", "add_line", "add_circle", "close_profile"):
+                    refs["profile_id"] = refs.get("profile_id", "__dry_run_profile__")
                 continue
 
-            data = _resolve_data(dict(call.data), refs)
             if call.command == "add_sketch":
-                r = self._add_sketch(data)
-                if r and getattr(r, "status_code", 0) != 200:
-                    return False
-                sketch_name = _get_sketch_name_from_response(r) or data.get("sketch_name")
-                if sketch_name:
-                    refs["sketch_name"] = sketch_name
-
+                result = self.backend.create_sketch(
+                    data.get("sketch_plane", "XY"),
+                    sketch_name=data.get("sketch_name"),
+                )
             elif call.command == "add_point":
-                sn = data.get("sketch_name")
-                pt = data.get("pt", {})
-                if sn:
-                    r = self._add_point(sn, pt)
-                    if r and getattr(r, "status_code", 0) != 200:
-                        return False
-                    pid = _get_profile_id_from_response(r)
-                    if pid:
-                        last_profile_id = pid
-
+                result = self.backend.add_point(data.get("sketch_name", ""), data.get("pt", {}))
             elif call.command == "add_line":
-                sn = data.get("sketch_name")
-                if sn:
-                    r = self._add_line(sn, data.get("pt1", {}), data.get("pt2", {}))
-                    if r and getattr(r, "status_code", 0) != 200:
-                        return False
-                    last_profile_id = _get_profile_id_from_response(r) or last_profile_id
-
+                result = self.backend.add_line(
+                    data.get("sketch_name", ""),
+                    data.get("pt1", {}),
+                    data.get("pt2", {}),
+                )
             elif call.command == "add_circle":
-                sn = data.get("sketch_name")
-                if sn:
-                    r = self._add_circle(sn, data.get("pt", {}), float(data.get("radius", 1)))
-                    if r and getattr(r, "status_code", 0) != 200:
-                        return False
-                    last_profile_id = _get_profile_id_from_response(r) or last_profile_id
-
+                result = self.backend.add_circle(
+                    data.get("sketch_name", ""),
+                    data.get("pt", {}),
+                    float(data.get("radius", 1.0)),
+                )
             elif call.command == "close_profile":
-                sn = data.get("sketch_name")
-                if sn:
-                    r = self._close_profile(sn)
-                    if r and getattr(r, "status_code", 0) != 200:
-                        return False
-                    last_profile_id = _get_profile_id_from_response(r) or last_profile_id
-
+                result = self.backend.close_profile(data.get("sketch_name", ""))
             elif call.command == "add_extrude":
                 refs["profile_id"] = last_profile_id
-                data = _resolve_data(dict(call.data), refs)
-                sn = data.get("sketch_name")
-                pid = data.get("profile_id")
-                if not sn or not pid:
+                extrude_data = _resolve_data(dict(call.data), refs)
+                sketch = extrude_data.get("sketch_name")
+                profile_id = extrude_data.get("profile_id")
+                if not sketch or not profile_id:
+                    self._last_step_error = "add_extrude requires resolved sketch_name and profile_id"
                     return False
-                r = self._add_extrude(
-                    sn,
-                    pid,
-                    float(data.get("distance", 1)),
-                    data.get("operation", "NewBodyFeatureOperation"),
-                    feature_name=data.get("feature_name"),
+                result = self.backend.extrude(
+                    sketch_name=sketch,
+                    profile_id=profile_id,
+                    distance=float(extrude_data.get("distance", 1.0)),
+                    operation=extrude_data.get("operation", "NewBodyFeatureOperation"),
+                    feature_name=extrude_data.get("feature_name"),
                 )
-                if r and getattr(r, "status_code", 0) != 200:
-                    return False
-                feature_name = data.get("feature_name") or ""
+            else:
+                self._last_step_error = f"unknown compiled command: {call.command}"
+                return False
+
+            if not result.ok:
+                self._last_step_error = result.reason or f"backend rejected command {call.command}"
+                return False
+            response = result.response
+            if _response_status_code(response) != 200:
+                self._last_step_error = _response_error_message(response)
+                return False
+
+            if call.command == "add_sketch":
+                sketch_name = _get_sketch_name_from_response(response) or data.get("sketch_name")
+                if sketch_name:
+                    refs["sketch_name"] = sketch_name
+            elif call.command in ("add_point", "add_line", "add_circle", "close_profile"):
+                last_profile_id = _get_profile_id_from_response(response) or last_profile_id
+                if last_profile_id:
+                    refs["profile_id"] = last_profile_id
+            elif call.command == "add_extrude":
+                feature_name = _normalize_name(data.get("feature_name"))
                 if feature_name and compiled.step_id:
                     self.registry[compiled.step_id] = {
-                        "sketch_name": sketch_name,
+                        "sketch_name": sketch_name or "",
                         "feature_name": feature_name,
-                        "body_name": (data.get("body_name") or ""),
+                        "body_name": _normalize_name(data.get("body_name")),
                         "last_profile_id": last_profile_id,
+                        "updated": False,
                     }
 
             if self.step_delay > 0:
@@ -280,46 +441,217 @@ class CadExecutor:
 
         return True
 
-    def execute_plan(self, plan: Dict[str, Any]) -> ExecutionResult:
-        """
-        Compile and execute plan. In edit mode, skip create for steps whose feature already exists (by name).
-        Never calls clear().
-        """
+    def execute_plan(
+        self,
+        plan: Dict[str, Any],
+        previous_plan: Optional[Dict[str, Any]] = None,
+    ) -> ExecutionResult:
         compiled_list = compile_plan(plan)
-        session = str(plan.get("session") or self.session_id or "session")
-        mode = (plan.get("mode") or "create").strip().lower()
+        steps_total = len(compiled_list)
+        mode = _normalize_name(plan.get("mode") or "create").lower()
         edit_mode = mode == "edit" or self.edit_mode
+        session = _normalize_name(plan.get("session") or self.session_id or "session")
+        steps = plan.get("steps") or []
+        steps_by_id = {s.get("id"): s for s in steps if isinstance(s, dict) and s.get("id")}
+        previous_steps = {}
+        if previous_plan:
+            previous_steps = {
+                s.get("id"): s for s in (previous_plan.get("steps") or []) if isinstance(s, dict) and s.get("id")
+            }
 
         steps_ok = 0
-        for cs in compiled_list:
-            if edit_mode and cs.primitive in ("rect_extrude", "circle_extrude", "poly_extrude", "wedge_extrude", "cut_extrude"):
-                feature_name = None
-                for c in cs.calls:
-                    if c.command == "add_extrude":
-                        feature_name = c.data.get("feature_name")
-                        break
-                if feature_name:
-                    found, err = self._find_feature_by_name(feature_name)
-                    if err:
+        for compiled in compiled_list:
+            step_id = compiled.step_id
+            primitive = compiled.primitive
+            current_step = steps_by_id.get(step_id) or {}
+            operation = _normalize_name(current_step.get("operation"))
+
+            cap_ok, cap_reason = self._check_capability_for_step(step_id, primitive, operation)
+            if not cap_ok:
+                if self.dry_run:
+                    self._record_trace(
+                        step_id=step_id,
+                        primitive=primitive,
+                        action="unsupported",
+                        backend_path=[],
+                        reason=f"{cap_reason} (dry-run stub; no geometry built)",
+                    )
+                    steps_ok += 1
+                    continue
+                self._record_trace(
+                    step_id=step_id,
+                    primitive=primitive,
+                    action="unsupported",
+                    backend_path=[],
+                    reason=cap_reason,
+                )
+                return ExecutionResult(
+                    success=False,
+                    steps_ok=steps_ok,
+                    steps_total=steps_total,
+                    message=cap_reason,
+                    registry=dict(self.registry),
+                    trace=list(self.trace),
+                )
+
+            if primitive in UNSUPPORTED_EXECUTION_PRIMITIVES:
+                reason = f"unsupported primitive in execution: {primitive}"
+                if self.dry_run:
+                    self._record_trace(
+                        step_id=step_id,
+                        primitive=primitive,
+                        action="unsupported",
+                        backend_path=[],
+                        reason=f"{reason} (dry-run stub; no geometry built)",
+                    )
+                    steps_ok += 1
+                    continue
+                self._record_trace(
+                    step_id=step_id,
+                    primitive=primitive,
+                    action="unsupported",
+                    backend_path=[],
+                    reason=reason,
+                )
+                return ExecutionResult(
+                    success=False,
+                    steps_ok=steps_ok,
+                    steps_total=steps_total,
+                    message=reason,
+                    registry=dict(self.registry),
+                    trace=list(self.trace),
+                )
+
+            feature_name = _get_feature_name_from_compiled_step(compiled)
+            if edit_mode and feature_name and primitive in EXTRUDE_PRIMITIVES:
+                found, find_err, find_path = self._feature_lookup(feature_name)
+                if find_err:
+                    self._record_trace(
+                        step_id=step_id,
+                        primitive=primitive,
+                        action="failed",
+                        backend_path=find_path,
+                        reason=find_err,
+                    )
+                    return ExecutionResult(
+                        success=False,
+                        steps_ok=steps_ok,
+                        steps_total=steps_total,
+                        message=f"duplicate entity name or find failed: {find_err}",
+                        registry=dict(self.registry),
+                        trace=list(self.trace),
+                    )
+                if found:
+                    if step_id in previous_steps and step_id in steps_by_id:
+                        decision = classify_edit_change(previous_steps[step_id], steps_by_id[step_id])
+                        if decision.classification == EDIT_RECREATE_REQUIRED:
+                            reason = f"recreate-required for step '{step_id}': {decision.reason}"
+                            self._record_trace(
+                                step_id=step_id,
+                                primitive=primitive,
+                                action="recreate-required",
+                                backend_path=find_path,
+                                reason=reason,
+                            )
+                            return ExecutionResult(
+                                success=False,
+                                steps_ok=steps_ok,
+                                steps_total=steps_total,
+                                message=reason,
+                                registry=dict(self.registry),
+                                trace=list(self.trace),
+                            )
+                        if decision.classification == EDIT_UNSUPPORTED:
+                            reason = f"unsupported in-place edit for step '{step_id}': {decision.reason}"
+                            self._record_trace(
+                                step_id=step_id,
+                                primitive=primitive,
+                                action="failed",
+                                backend_path=find_path,
+                                reason=reason,
+                            )
+                            return ExecutionResult(
+                                success=False,
+                                steps_ok=steps_ok,
+                                steps_total=steps_total,
+                                message=reason,
+                                registry=dict(self.registry),
+                                trace=list(self.trace),
+                            )
+
+                    new_distance = _get_distance_from_compiled_step(compiled)
+                    updated, update_err, update_path = self._update_feature_distance(feature_name, new_distance)
+                    backend_path = find_path + update_path
+                    if not updated:
+                        self._record_trace(
+                            step_id=step_id,
+                            primitive=primitive,
+                            action="failed",
+                            backend_path=backend_path,
+                            reason=update_err,
+                        )
                         return ExecutionResult(
                             success=False,
                             steps_ok=steps_ok,
-                            steps_total=len(compiled_list),
-                            message=f"find_entity_by_name failed: {err}",
+                            steps_total=steps_total,
+                            message=f"existing feature found, update_extrude failed: {update_err}",
                             registry=dict(self.registry),
+                            trace=list(self.trace),
                         )
-                    if found:
-                        if self.dry_run:
-                            print(f"  [dry-run] skip (exists): {cs.step_id}")
-                        steps_ok += 1
-                        continue
-            if self.execute_compiled_step(cs, session):
-                steps_ok += 1
+                    if self.dry_run:
+                        print(f"  [dry-run] update_extrude feature={feature_name!r} distance={new_distance}")
+                    self.registry[step_id] = {
+                        "sketch_name": "",
+                        "feature_name": feature_name,
+                        "body_name": "",
+                        "last_profile_id": None,
+                        "updated": True,
+                    }
+                    self._record_trace(
+                        step_id=step_id,
+                        primitive=primitive,
+                        action="updated",
+                        backend_path=backend_path,
+                        reason="",
+                    )
+                    steps_ok += 1
+                    if self.step_delay > 0:
+                        time.sleep(self.step_delay)
+                    continue
 
+            ok = self.execute_compiled_step(compiled, session)
+            if not ok:
+                reason = self._last_step_error or "step execution failed"
+                self._record_trace(
+                    step_id=step_id,
+                    primitive=primitive,
+                    action="failed",
+                    backend_path=list(self._last_step_backend_path),
+                    reason=reason,
+                )
+                return ExecutionResult(
+                    success=False,
+                    steps_ok=steps_ok,
+                    steps_total=steps_total,
+                    message=reason,
+                    registry=dict(self.registry),
+                    trace=list(self.trace),
+                )
+            self._record_trace(
+                step_id=step_id,
+                primitive=primitive,
+                action="created",
+                backend_path=list(self._last_step_backend_path),
+                reason="dry-run" if self.dry_run else "",
+            )
+            steps_ok += 1
+
+        mode_suffix = "create + in-place update" if edit_mode else "create"
         return ExecutionResult(
-            success=steps_ok == len(compiled_list),
+            success=steps_ok == steps_total,
             steps_ok=steps_ok,
-            steps_total=len(compiled_list),
-            message=f"Executed {steps_ok}/{len(compiled_list)} steps",
+            steps_total=steps_total,
+            message=f"Executed {steps_ok}/{steps_total} steps ({mode_suffix})",
             registry=dict(self.registry),
+            trace=list(self.trace),
         )
