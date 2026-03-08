@@ -212,7 +212,9 @@ def step_bounds(step: Dict[str, Any]) -> Optional[Dict[str, float]]:
     if base == "XY":
         return {"x_min": p0, "x_max": p1, "y_min": q0, "y_max": q1, "z_min": off, "z_max": off + d}
     if base == "XZ":
-        return {"x_min": p0, "x_max": p1, "y_min": off, "y_max": off + d, "z_min": q0, "z_max": q1}
+        # In this Fusion setup, XZ plane sketch Y maps to -Z in world coords.
+        # Negate z so heuristic bounds match actual Fusion body positions.
+        return {"x_min": p0, "x_max": p1, "y_min": off, "y_max": off + d, "z_min": min(-q0, -q1), "z_max": max(-q0, -q1)}
     if base == "YZ":
         return {"x_min": off, "x_max": off + d, "y_min": p0, "y_max": p1, "z_min": q0, "z_max": q1}
     return None

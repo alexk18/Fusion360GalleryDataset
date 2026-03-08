@@ -279,17 +279,23 @@ class IterativeCreateAgent:
                 }
             )
 
-            # Stop once required relational roles are built and runtime state is plausible.
+            # --- Structural stop condition ---
+            # Success requires BOTH role completion AND structural plausibility.
             req = set(graph.get("required_roles") or [])
             built_roles = {
                 role
                 for role, sid in (graph.get("role_to_step") or {}).items()
                 if sid and sid in executed_ids
             }
-            connectivity_ok = int(post_eval.get("disconnected_components", 0) or 0) <= 0
-            floating_ok = int(post_eval.get("floating_parts_count", 0) or 0) <= 0
-            attachment_ok = float(post_eval.get("attachment_plausibility", 1.0) or 0.0) >= 0.5
-            if req and req.issubset(built_roles) and connectivity_ok and floating_ok and attachment_ok:
+            post_disconnected = int(post_eval.get("disconnected_components", 0) or 0)
+            post_floating = int(post_eval.get("floating_parts_count", 0) or 0)
+            post_attachment = float(post_eval.get("attachment_plausibility", 1.0) or 0.0)
+            connectivity_ok = post_disconnected <= 0
+            floating_ok = post_floating <= 0
+            attachment_ok = post_attachment >= 0.5
+            structurally_plausible = connectivity_ok and floating_ok and attachment_ok
+
+            if req and req.issubset(built_roles) and structurally_plausible:
                 loop_trace.append(
                     {
                         "iteration": iteration,
@@ -302,16 +308,17 @@ class IterativeCreateAgent:
                     }
                 )
                 break
-            if req and req.issubset(built_roles):
+
+            if req and req.issubset(built_roles) and not structurally_plausible:
                 loop_trace.append(
                     {
                         "iteration": iteration,
-                        "action": "continue_after_required",
-                        "phase": phase,
-                        "reason": "required roles built but runtime attachment/connectivity still weak",
-                        "disconnected_components": int(post_eval.get("disconnected_components", 0) or 0),
-                        "floating_parts_count": int(post_eval.get("floating_parts_count", 0) or 0),
-                        "attachment_plausibility": float(post_eval.get("attachment_plausibility", 0.0) or 0.0),
+                        "action": "continue_closure",
+                        "phase": "closure",
+                        "reason": "required roles built but assembly structurally unstable",
+                        "disconnected_components": post_disconnected,
+                        "floating_parts_count": post_floating,
+                        "attachment_plausibility": post_attachment,
                     }
                 )
 

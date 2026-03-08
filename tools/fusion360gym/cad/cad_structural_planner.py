@@ -108,16 +108,19 @@ def classify_shape_family(user_request: str, images: Optional[Sequence[Dict[str,
         "wardrobe",
     )
 
-    if any(k in text for k in smooth_freeform):
-        return "unsupported_smooth_freeform"
+    # Check specific buildable families BEFORE the smooth_freeform catch-all.
+    # This prevents generic freeform keywords (e.g. "head") from shadowing
+    # compound words that belong to specific families (e.g. "headboard" -> bed).
+    if any(k in text for k in furniture_boxy):
+        return "furniture_boxy_panel"
     if any(k in text for k in vehicle):
         return "lowpoly_hard_surface_vehicle"
     if any(k in text for k in rotational):
         return "rotational_bodies"
     if any(k in text for k in profile_symmetric):
         return "profile_driven_symmetric"
-    if any(k in text for k in furniture_boxy):
-        return "furniture_boxy_panel"
+    if any(k in text for k in smooth_freeform):
+        return "unsupported_smooth_freeform"
     if images and len(images) >= 3:
         return "profile_driven_symmetric"
     return "furniture_boxy_panel"
@@ -152,7 +155,7 @@ def _furniture_spec() -> StructuralBuildSpec:
             "avoid micro details",
         ],
         construction_strategy="panel-first extrusions with optional cutouts",
-        build_order=["base_panel", "left_support", "right_support", "top_panel", "back_panel", "utility_cutout"],
+        build_order=["left_support", "right_support", "base_panel", "top_panel", "back_panel", "utility_cutout"],
         allowed_primitives=allowed,
         required_capabilities=required_capabilities_for_primitives(allowed),
         confidence_notes=["conservative boxy decomposition"],

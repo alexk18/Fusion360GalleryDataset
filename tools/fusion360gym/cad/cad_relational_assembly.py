@@ -287,21 +287,38 @@ def evaluate_relational_graph(graph: Dict[str, Any], state_snapshot: Dict[str, A
                     unattached_pairs.append({"role": role, "dependency": dep, "step_id": role_sid, "dep_step_id": dep_sid})
         attachment_plausibility = float(attachment_checks_passed) / float(max(1, attachment_checks_total))
     else:
-        attachment_plausibility = 1.0
+        # No relation evidence at all.  If there are built dependency pairs
+        # that *should* have attachment evidence, use a skeptical prior
+        # instead of optimistic neutral -- absence of evidence is not evidence
+        # of attachment.
+        expected_attach_pairs = 0
+        for role, deps in (graph.get("dependencies") or {}).items():
+            if role not in built_set:
+                continue
+            for dep in deps:
+                if dep in built_set:
+                    expected_attach_pairs += 1
+        attachment_plausibility = 0.3 if expected_attach_pairs > 0 else 1.0
 
     required_built_ratio = (len(required_roles.intersection(built_set)) / max(1, len(required_roles))) if required_roles else 1.0
     connectivity_factor = 1.0 / float(1 + disconnected_count)
     floating_factor = 1.0 / float(1 + len(floating_ids))
-    score = (
+    raw_score = (
         (0.45 * required_built_ratio)
         + (0.25 * attachment_plausibility)
         + (0.20 * connectivity_factor)
         + (0.10 * floating_factor)
     )
     if unmet_dependencies:
-        score = max(0.0, score - 0.15 * min(3, len(unmet_dependencies)))
+        raw_score = max(0.0, raw_score - 0.15 * min(3, len(unmet_dependencies)))
     if unattached_pairs:
-        score = max(0.0, score - 0.10 * min(3, len(unattached_pairs)))
+        raw_score = max(0.0, raw_score - 0.10 * min(3, len(unattached_pairs)))
+    # Disconnection is a hard structural defect: apply multiplicative penalty
+    # so that "all roles built but disconnected" cannot produce a high score.
+    if disconnected_count > 0:
+        score = raw_score * connectivity_factor
+    else:
+        score = raw_score
 
     # Lightweight confidence summary from introspection layer.
     src = state_snapshot.get("introspection_sources") if isinstance(state_snapshot.get("introspection_sources"), dict) else {}
