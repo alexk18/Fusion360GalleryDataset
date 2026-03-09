@@ -10,6 +10,9 @@ instead of going through template/grammar synthesis.
 
 from __future__ import annotations
 
+import base64
+import os
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from .cad_backend import BackendResult, FusionCadBackend
@@ -236,15 +239,18 @@ CAD_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "screenshot",
-        "description": "Capture a viewport screenshot of the current model.",
+        "description": (
+            "Capture a viewport screenshot of the current model and return it as an image. "
+            "The camera automatically fits to show all geometry. "
+            "Use this to visually verify your work after building major sections. "
+            "No file path needed — the image is returned directly for you to see."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "file": {"type": "string", "description": "Output file path for the screenshot"},
                 "width": {"type": "integer", "description": "Image width in pixels", "default": 512},
                 "height": {"type": "integer", "description": "Image height in pixels", "default": 512},
             },
-            "required": ["file"],
         },
     },
     # === MODEL MANAGEMENT ===
@@ -287,6 +293,9 @@ class ToolDispatcher:
                 if result.ok:
                     return {"ok": True, "result": self._extract_data(result)}
                 return {"ok": False, "error": result.reason or "command failed"}
+            # Handler returned a raw dict (e.g. screenshot with image_base64)
+            if isinstance(result, dict) and "ok" in result:
+                return result
             return {"ok": True, "result": result}
         except Exception as ex:
             return {"ok": False, "error": f"{type(ex).__name__}: {ex}"}
@@ -396,12 +405,28 @@ class ToolDispatcher:
     def _handle_query_bounding_box(self, inp: Dict[str, Any]) -> BackendResult:
         return self.backend.query_bounding_box()
 
-    def _handle_screenshot(self, inp: Dict[str, Any]) -> BackendResult:
-        return self.backend.screenshot(
-            file=inp["file"],
-            width=inp.get("width", 512),
-            height=inp.get("height", 512),
-        )
+    def _handle_screenshot(self, inp: Dict[str, Any]) -> Dict[str, Any]:
+        """Take screenshot, read the file, return base64 image data."""
+        width = inp.get("width", 512)
+        height = inp.get("height", 512)
+        # Use temp file for screenshot
+        tmp_dir = tempfile.gettempdir()
+        tmp_path = os.path.join(tmp_dir, "_cad_agent_screenshot.png")
+        result = self.backend.screenshot(file=tmp_path, width=width, height=height)
+        if not result.ok:
+            return {"ok": False, "error": result.reason or "screenshot failed"}
+        # Read back and encode
+        try:
+            with open(tmp_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode("ascii")
+            return {
+                "ok": True,
+                "image_base64": img_data,
+                "width": width,
+                "height": height,
+            }
+        except Exception as ex:
+            return {"ok": False, "error": f"Failed to read screenshot: {ex}"}
 
     def _handle_clear(self, inp: Dict[str, Any]) -> BackendResult:
         result = self.backend._call("clear", {})

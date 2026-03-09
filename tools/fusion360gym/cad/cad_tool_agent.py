@@ -34,51 +34,120 @@ TOOL_AGENT_SYSTEM_PROMPT = r"""You are a CAD engineer building 3D objects in Fus
 
 You have direct access to CAD tools. Use them to build what the user requests.
 
+## CRITICAL RULE: One part per step
+Each step should build exactly ONE part:
+1. Call `create_sketch` and WAIT for the result to get the sketch_name.
+2. In the NEXT step, use the returned sketch_name to call `add_rectangle`/`add_circle`/`add_polygon`.
+3. In the NEXT step, call `extrude` using the same sketch_name.
+
+You CAN batch independent tools (e.g., `get_model_state` + `screenshot`), but NEVER batch
+tools that depend on each other's results. The sketch_name returned by create_sketch is
+needed by add_rectangle and extrude — you must wait for it.
+
+Exception: `clear` can be called alone or with other independent tools.
+
 ## Coordinate system
 - Units: centimeters (cm)
 - X: left/right (center at X=0)
 - Y: front/back (back at Y=0, front at +Y)
-- Z: up (floor at Z=0)
-- Plane XY extrudes along +Z
-- Plane XZ extrudes along +Y (sketch Y maps to -Z in world)
-- Plane YZ extrudes along +X
+- Z: up/down (floor at Z=0, up is +Z)
+
+## ONLY use XY plane — NEVER use XZ or YZ
+- ALWAYS use `XY` or `XY@<offset>` as the sketch plane.
+- The XY plane is the only plane with predictable coordinate mapping:
+  - Sketch X → World X
+  - Sketch Y → World Y
+  - Plane offset → World Z (height)
+  - Extrude goes along +Z
+- XZ and YZ planes have inverted coordinate mappings in Fusion 360 that cause
+  parts to appear at negative Z (below the floor). NEVER use them.
+- To build vertical walls or side features, use XY plane at the correct Z offset
+  and shape the profile in X/Y.
+
+## Positioning rules (CRITICAL)
+- **XY@Z sketch**: Drawing at (cx, cy) means world position (cx, cy, Z). Extrude distance D creates geometry from Z to Z+D.
+- **ALL geometry must have Z >= 0**. Nothing below the floor.
+- **To stack parts**: If body A ends at z_max=10, next sketch at "XY@10" (or "XY@9.5" for Join overlap).
+- **Legs/supports**: Sketch at "XY@0", extrude upward. E.g., 40cm tall legs → extrude(40).
+- **Tabletop on legs**: If legs end at Z=40, sketch at "XY@39.5" (overlap), extrude 3.5cm → top at Z=43.
+- **Symmetric parts**: Mirror X or Y coordinates. E.g., legs at (cx=-20, cy=-15) and (cx=20, cy=-15).
+- **Never guess coordinates** — calculate from dimensions and existing geometry.
+
+## Planning before building
+Before calling any tool, plan the entire object decomposition in a text block:
+1. List ALL parts with their roles (e.g. "hull", "turret", "leg_front_left")
+2. For each part, calculate exact coordinates: start Z, end Z, center X/Y, width, height
+3. Determine build order: base/largest part first, then attached parts
+4. Verify that all Z values are >= 0
 
 ## Workflow
-1. Start by calling `clear` to reset the model (unless extending existing work).
-2. Think about the object decomposition: what are the main masses?
-3. Build the foundation/base body first using `create_sketch` + `add_rectangle`/`add_polygon`/`add_circle` + `extrude` with NewBodyFeatureOperation.
-4. Add attached parts using JoinFeatureOperation (requires volumetric overlap with existing body).
-5. Add cut features using CutFeatureOperation for holes/slots.
-6. Use `get_bodies` or `get_model_state` to inspect what you've built.
-7. Continue until the object is complete.
+1. Call `clear` to reset the model.
+2. Call `create_sketch("XY@0")` for the base part.
+3. Add geometry to the sketch (add_rectangle, add_circle, etc.).
+4. Extrude with NewBodyFeatureOperation.
+5. Call `get_model_state` + `screenshot` to verify the base body.
+6. Build next part: create_sketch → add geometry → extrude.
+7. After every 2-3 parts, call `screenshot` to verify progress.
+8. Continue until done. Take a final `screenshot`.
 
-## Rules
-- Keep geometry physically connected and plausible.
-- Floor is at Z=0. No negative Z.
-- Use realistic proportions.
-- For JoinFeatureOperation: the new extrusion MUST physically overlap with an existing body (at least 0.5cm overlap).
-- When building a profile, always close it before extruding.
-- profile_id is typically "profile_0" for the first (and usually only) profile in a sketch.
-- Each sketch can only have one profile. Create separate sketches for separate extrusions.
-- Prefer simpler geometry with fewer steps over complex detail.
-- If you're unsure about exact dimensions, use reasonable estimates.
+## Screenshot schedule (MANDATORY)
+- Take a `screenshot` after the FIRST extrude to verify the base body.
+- Take a `screenshot` after every 2-3 new parts to check positioning.
+- Take a final `screenshot` when done.
+- You should take at least 3 screenshots during a typical build.
+- Each screenshot auto-fits the camera to show the entire model.
+- If you see parts below the floor (negative Z) in a screenshot, something is wrong — fix it.
 
-## Sketch workflow
-For each solid body you want to create:
-1. create_sketch(plane) — creates a new sketch
-2. add_rectangle/add_circle/add_polygon — draw the profile shape
-3. extrude(sketch_name, profile_id, distance, operation) — create the 3D body
+## JoinFeatureOperation overlap rules
+- The new extrusion MUST volumetrically intersect with an existing body by at least 0.5cm.
+- For a part on TOP: sketch plane = target z_max - 0.5
+- For a part BESIDE: the extrude profile should overlap the existing body footprint by ≥0.5cm.
+- If Join fails, check coordinates and retry with corrected overlap.
 
-## Example: Building a simple table
-1. create_sketch("XY@0") → sketch for legs
-2. add_rectangle(sketch, cx=-20, cy=-15, w=3, h=3) → leg profile
-3. extrude(sketch, "profile_0", 40, "NewBodyFeatureOperation") → first leg
-4. create_sketch("XY@0") → new sketch for second leg
-5. add_rectangle(sketch, cx=20, cy=-15, w=3, h=3)
-6. extrude(sketch, "profile_0", 40, "NewBodyFeatureOperation") → second leg
-7. create_sketch("XY@40") → sketch for tabletop at z=40
-8. add_rectangle(sketch, cx=0, cy=0, w=50, h=35)
-9. extrude(sketch, "profile_0", 3, "JoinFeatureOperation") → tabletop merged with legs
+## Sketch rules
+- Each sketch has exactly ONE profile. Create a new sketch for each separate extrusion.
+- profile_id is typically "profile_0".
+- add_rectangle/add_circle/add_polygon automatically close the profile. Do NOT call close_profile after them.
+- Only call close_profile when building manual shapes with add_line.
+
+## Quality guidelines
+- Build 5-10 major parts for most objects. Add meaningful detail.
+- Use realistic proportions and real-world scale in cm.
+- Keep ALL geometry above Z=0 (floor level).
+- Center the object around X=0, Y=0 when possible.
+
+## Example: Building a simple table (height=40cm, top=50x35cm, legs=3x3cm)
+
+Plan:
+- 4 legs: 3x3cm cross-section, Z=0 to Z=40, at corners of a 44x29cm rectangle
+- 1 tabletop: 50x35cm, 3cm thick, Z=39.5 to Z=43 (0.5cm overlap with legs)
+- All Z >= 0 ✓
+
+Step 1: clear
+  clear()
+
+Step 2: create sketch for leg 1
+  create_sketch("XY@0") → returns sketch_name
+
+Step 3: draw leg 1 profile
+  add_rectangle(sketch_name, cx=-22, cy=-13, w=3, h=3)
+
+Step 4: extrude leg 1
+  extrude(sketch_name, distance=40, operation=NewBodyFeatureOperation)
+
+Step 5: verify base
+  get_model_state() + screenshot()
+
+Step 6-8: repeat for legs 2-4 (each: create_sketch → add_rectangle → extrude)
+
+Step 9: verify all legs
+  screenshot()
+
+Step 10-12: build tabletop
+  create_sketch("XY@39.5") → add_rectangle(cx=0,cy=0,w=50,h=35) → extrude(3.5, JoinFeatureOperation)
+
+Step 13: final verification
+  get_model_state() + screenshot()
 """
 
 
@@ -117,7 +186,7 @@ class ToolDrivenAgent:
         llm_call: Callable,
         *,
         model: str = "",
-        max_iterations: int = 30,
+        max_iterations: int = 50,
         step_delay: float = 0.3,
         verbose: bool = True,
     ):
@@ -199,7 +268,8 @@ class ToolDrivenAgent:
                 tool_calls_made += 1
 
                 # Log
-                action = "ok" if dispatch_result.get("ok") else "error"
+                is_ok = dispatch_result.get("ok", False)
+                action = "ok" if is_ok else "error"
                 if self.verbose:
                     print(f" {tool_name}={action}", end="", flush=True)
 
@@ -207,11 +277,38 @@ class ToolDrivenAgent:
                     "iteration": iteration,
                     "tool": tool_name,
                     "input": tool_input,
-                    "ok": dispatch_result.get("ok", False),
+                    "ok": is_ok,
                 })
 
                 # Build tool result for Claude
-                tool_result_content = self._format_tool_result(dispatch_result)
+                # Screenshot returns image — send as multimodal content
+                if tool_name == "screenshot" and is_ok and "image_base64" in dispatch_result:
+                    tool_result_content = [
+                        {"type": "text", "text": "Screenshot captured (camera fitted to model):"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": dispatch_result["image_base64"],
+                            },
+                        },
+                    ]
+                else:
+                    tool_result_content = self._format_tool_result(dispatch_result)
+
+                # Z-validation after extrude: check for negative Z
+                if tool_name == "extrude" and is_ok:
+                    z_warning = self._check_negative_z()
+                    if z_warning:
+                        if self.verbose:
+                            print(f" Z-WARNING", end="", flush=True)
+                        # Append warning to the tool result
+                        if isinstance(tool_result_content, str):
+                            tool_result_content = tool_result_content + "\n\n" + z_warning
+                        elif isinstance(tool_result_content, list):
+                            tool_result_content.append({"type": "text", "text": z_warning})
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tool_id,
@@ -229,11 +326,19 @@ class ToolDrivenAgent:
 
             result.steps_executed = tool_calls_made
 
-        # Get final model state
+        # Get final model state (include bodies separately)
         try:
             state_result = self.backend.get_model_state()
             if state_result.ok:
                 result.final_state = self.dispatcher._extract_data(state_result)
+            # Also fetch bodies for accurate reporting
+            bodies_result = self.backend.get_bodies()
+            if bodies_result.ok:
+                bodies_data = self.dispatcher._extract_data(bodies_result)
+                if result.final_state is None:
+                    result.final_state = {}
+                if isinstance(result.final_state, dict):
+                    result.final_state["bodies"] = bodies_data
         except Exception:
             pass
 
@@ -275,7 +380,7 @@ class ToolDrivenAgent:
                 system=TOOL_AGENT_SYSTEM_PROMPT,
                 messages=messages,
                 tools=self.tools,
-                max_tokens=4096,
+                max_tokens=8192,
                 temperature=0.1,
             )
             return response
@@ -315,6 +420,35 @@ class ToolDrivenAgent:
         if isinstance(response, dict) and "content" in response:
             return response["content"]
         return []
+
+    def _check_negative_z(self) -> str:
+        """Check model bounding box for negative Z values after extrude."""
+        try:
+            bbox_result = self.backend.query_bounding_box()
+            if not bbox_result.ok:
+                return ""
+            data = self.dispatcher._extract_data(bbox_result)
+            if isinstance(data, dict):
+                z_min = None
+                # Try different response formats
+                if "z_min" in data:
+                    z_min = data["z_min"]
+                elif "min" in data and isinstance(data["min"], dict):
+                    z_min = data["min"].get("z")
+                elif "min_point" in data and isinstance(data["min_point"], dict):
+                    z_min = data["min_point"].get("z")
+                if z_min is not None and z_min < -0.01:
+                    return (
+                        f"⚠ WARNING: Model has geometry below floor level! "
+                        f"Bounding box z_min = {z_min:.2f} cm. "
+                        f"All geometry should be at Z >= 0. "
+                        f"This usually means you used an XZ or YZ plane, or placed a sketch at a negative Z offset. "
+                        f"Use ONLY 'XY' or 'XY@<positive_offset>' planes. "
+                        f"Consider clearing and rebuilding the affected part at the correct Z position."
+                    )
+        except Exception:
+            pass
+        return ""
 
     @staticmethod
     def _format_tool_result(dispatch_result: Dict[str, Any]) -> str:

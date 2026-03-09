@@ -146,6 +146,32 @@ class TestToolDispatcher(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("ValueError", result["error"])
 
+    def test_dispatch_screenshot_returns_image(self):
+        """Screenshot handler should return base64 image data."""
+        import tempfile
+        # Create a fake PNG file that the handler will read back
+        tmp_dir = tempfile.gettempdir()
+        fake_png = os.path.join(tmp_dir, "_cad_agent_screenshot.png")
+        with open(fake_png, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)  # Fake PNG header
+
+        self.backend.screenshot.return_value = BackendResult(ok=True, response={"data": "ok"})
+        result = self.dispatcher.dispatch("screenshot", {"width": 256, "height": 256})
+        self.assertTrue(result["ok"])
+        self.assertIn("image_base64", result)
+        self.assertIsInstance(result["image_base64"], str)
+
+        # Clean up
+        if os.path.exists(fake_png):
+            os.remove(fake_png)
+
+    def test_dispatch_screenshot_failure(self):
+        """Screenshot returns error when backend fails."""
+        self.backend.screenshot.return_value = BackendResult(ok=False, reason="no viewport")
+        result = self.dispatcher.dispatch("screenshot", {})
+        self.assertFalse(result["ok"])
+        self.assertIn("no viewport", result["error"])
+
 
 # ---------------------------------------------------------------------------
 # Agent tests
@@ -280,9 +306,69 @@ class TestToolDrivenAgent(unittest.TestCase):
         self.assertIn("Fusion 360", TOOL_AGENT_SYSTEM_PROMPT)
         self.assertIn("create_sketch", TOOL_AGENT_SYSTEM_PROMPT)
         self.assertIn("extrude", TOOL_AGENT_SYSTEM_PROMPT)
-        self.assertIn("NewBodyFeatureOperation", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("NewBody", TOOL_AGENT_SYSTEM_PROMPT)
         self.assertIn("JoinFeatureOperation", TOOL_AGENT_SYSTEM_PROMPT)
-        self.assertIn("CutFeatureOperation", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("Join", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_system_prompt_has_positioning_rules(self):
+        """System prompt includes enhanced positioning rules."""
+        self.assertIn("get_model_state", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("overlap", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("screenshot", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("Planning before building", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("Positioning rules", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_system_prompt_has_verification_workflow(self):
+        """System prompt includes screenshot schedule and sequential build."""
+        self.assertIn("Screenshot schedule", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("auto-fits the camera", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("One part per step", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_agent_screenshot_visual_feedback(self):
+        """Agent sends screenshot image back to Claude as visual content."""
+        import tempfile
+        backend = make_mock_backend()
+        # Create fake PNG for the screenshot handler to read
+        tmp_dir = tempfile.gettempdir()
+        fake_png = os.path.join(tmp_dir, "_cad_agent_screenshot.png")
+        with open(fake_png, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        call_count = [0]
+        screenshot_msg_seen = [False]
+
+        def mock_llm_call(*, model, system, messages, tools, max_tokens, temperature):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "s1", "name": "screenshot", "input": {}},
+                ], stop_reason="tool_use")
+            else:
+                # Check that the screenshot result contains image content
+                last_user_msg = messages[-1]
+                content = last_user_msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            inner = item.get("content", "")
+                            if isinstance(inner, list):
+                                for block in inner:
+                                    if isinstance(block, dict) and block.get("type") == "image":
+                                        screenshot_msg_seen[0] = True
+                return self._make_llm_response([
+                    {"type": "text", "text": "Looks good!"},
+                ])
+
+        agent = ToolDrivenAgent(
+            backend=backend, llm_call=mock_llm_call,
+            model="test-model", max_iterations=5, step_delay=0, verbose=False,
+        )
+        result = agent.run("Check the model")
+        self.assertTrue(result.ok)
+        self.assertTrue(screenshot_msg_seen[0], "Screenshot image should be sent back to Claude")
+
+        if os.path.exists(fake_png):
+            os.remove(fake_png)
 
     def test_agent_result_dataclass(self):
         """ToolAgentResult has correct defaults."""
@@ -294,6 +380,97 @@ class TestToolDrivenAgent(unittest.TestCase):
         self.assertIsNone(r.final_state)
         self.assertEqual(r.error, "")
         self.assertEqual(r.conversation, [])
+
+    def test_system_prompt_xy_only_rule(self):
+        """System prompt forbids XZ and YZ planes."""
+        self.assertIn("ONLY use XY plane", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("NEVER use XZ or YZ", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("negative Z", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_system_prompt_sequential_sketch_rule(self):
+        """System prompt requires sequential create_sketch → add geometry → extrude."""
+        self.assertIn("WAIT for the result", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("NEVER batch", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("sketch_name returned by create_sketch", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_agent_z_validation_warns_on_negative_z(self):
+        """Agent warns Claude when extrude produces geometry below Z=0."""
+        backend = make_mock_backend()
+        # Make query_bounding_box return negative Z
+        backend.query_bounding_box.return_value = BackendResult(
+            ok=True, response={"data": {"z_min": -5.0, "z_max": 10.0}}
+        )
+        call_count = [0]
+        z_warning_seen = [False]
+
+        def mock_llm_call(*, model, system, messages, tools, max_tokens, temperature):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "e1", "name": "extrude",
+                     "input": {"sketch_name": "S1", "distance": 10,
+                               "operation": "NewBodyFeatureOperation"}},
+                ], stop_reason="tool_use")
+            else:
+                # Check that warning was included in the tool result
+                last_user_msg = messages[-1]
+                content = last_user_msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            inner = item.get("content", "")
+                            if isinstance(inner, str) and "WARNING" in inner:
+                                z_warning_seen[0] = True
+                return self._make_llm_response([
+                    {"type": "text", "text": "Fixed."},
+                ])
+
+        agent = ToolDrivenAgent(
+            backend=backend, llm_call=mock_llm_call,
+            model="test-model", max_iterations=5, step_delay=0, verbose=False,
+        )
+        result = agent.run("Build something")
+        self.assertTrue(result.ok)
+        self.assertTrue(z_warning_seen[0], "Z-validation warning should be sent to Claude")
+
+    def test_agent_z_validation_no_warning_when_ok(self):
+        """Agent does NOT warn when Z >= 0."""
+        backend = make_mock_backend()
+        # Positive Z bounding box
+        backend.query_bounding_box.return_value = BackendResult(
+            ok=True, response={"data": {"z_min": 0.0, "z_max": 10.0}}
+        )
+        call_count = [0]
+        z_warning_seen = [False]
+
+        def mock_llm_call(*, model, system, messages, tools, max_tokens, temperature):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "e1", "name": "extrude",
+                     "input": {"sketch_name": "S1", "distance": 10,
+                               "operation": "NewBodyFeatureOperation"}},
+                ], stop_reason="tool_use")
+            else:
+                last_user_msg = messages[-1]
+                content = last_user_msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            inner = item.get("content", "")
+                            if isinstance(inner, str) and "WARNING" in inner:
+                                z_warning_seen[0] = True
+                return self._make_llm_response([
+                    {"type": "text", "text": "Done."},
+                ])
+
+        agent = ToolDrivenAgent(
+            backend=backend, llm_call=mock_llm_call,
+            model="test-model", max_iterations=5, step_delay=0, verbose=False,
+        )
+        result = agent.run("Build something")
+        self.assertTrue(result.ok)
+        self.assertFalse(z_warning_seen[0], "No warning when Z >= 0")
 
 
 if __name__ == "__main__":

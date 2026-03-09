@@ -111,7 +111,7 @@ USE_LEGACY_BBOX_FALLBACK = os.environ.get("USE_LEGACY_BBOX_FALLBACK", "0").strip
 USE_TOOL_DRIVEN_AGENT = os.environ.get("USE_TOOL_DRIVEN_AGENT", "0").strip().lower() in (
     "1", "true", "yes", "on"
 )
-TOOL_AGENT_MAX_ITERATIONS = int(os.environ.get("TOOL_AGENT_MAX_ITERATIONS", "30"))
+TOOL_AGENT_MAX_ITERATIONS = int(os.environ.get("TOOL_AGENT_MAX_ITERATIONS", "50"))
 TOOL_AGENT_MODEL = os.environ.get("TOOL_AGENT_MODEL", "")
 
 # ---------------------------------------------------------------------------
@@ -1213,13 +1213,18 @@ class FusionAIAssistant:
         result = agent.run(user_request, images=images)
         if result.ok:
             print(f"\n  Tool agent OK: {result.steps_executed} tool calls in {result.iterations} iterations")
-            if result.final_state:
+            if result.final_state and isinstance(result.final_state, dict):
                 bodies = result.final_state.get("bodies", [])
-                if isinstance(bodies, list):
+                if isinstance(bodies, list) and bodies:
                     print(f"  Bodies in model: {len(bodies)}")
                     for b in bodies[:10]:
-                        name = b if isinstance(b, str) else b.get("name", str(b))
-                        print(f"    - {name}")
+                        if isinstance(b, str):
+                            print(f"    - {b}")
+                        elif isinstance(b, dict):
+                            print(f"    - {b.get('name', str(b))}")
+                bbox = result.final_state.get("bounding_box") or result.final_state.get("bbox")
+                if isinstance(bbox, dict):
+                    print(f"  Bounding box: {bbox}")
         else:
             print(f"\n  Tool agent failed: {result.error}")
         return result.ok, result
