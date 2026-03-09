@@ -381,17 +381,25 @@ class TestToolDrivenAgent(unittest.TestCase):
         self.assertEqual(r.error, "")
         self.assertEqual(r.conversation, [])
 
-    def test_system_prompt_xy_only_rule(self):
-        """System prompt forbids XZ and YZ planes."""
-        self.assertIn("ONLY use XY plane", TOOL_AGENT_SYSTEM_PROMPT)
-        self.assertIn("NEVER use XZ or YZ", TOOL_AGENT_SYSTEM_PROMPT)
-        self.assertIn("negative Z", TOOL_AGENT_SYSTEM_PROMPT)
+    def test_system_prompt_plane_mapping(self):
+        """System prompt documents all three plane coordinate mappings."""
+        self.assertIn("XY@Z_off", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("XZ@Y_off", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("YZ@X_off", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("Default to XY plane", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("sketch Y >= 0", TOOL_AGENT_SYSTEM_PROMPT)
 
     def test_system_prompt_sequential_sketch_rule(self):
         """System prompt requires sequential create_sketch → add geometry → extrude."""
         self.assertIn("WAIT for the result", TOOL_AGENT_SYSTEM_PROMPT)
         self.assertIn("NEVER batch", TOOL_AGENT_SYSTEM_PROMPT)
         self.assertIn("sketch_name returned by create_sketch", TOOL_AGENT_SYSTEM_PROMPT)
+
+    def test_system_prompt_wheel_example(self):
+        """System prompt includes car/wheel example with XZ plane."""
+        self.assertIn("Wheel example", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("XZ plane", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("Car with wheels", TOOL_AGENT_SYSTEM_PROMPT)
 
     def test_agent_z_validation_warns_on_negative_z(self):
         """Agent warns Claude when extrude produces geometry below Z=0."""
@@ -471,6 +479,81 @@ class TestToolDrivenAgent(unittest.TestCase):
         result = agent.run("Build something")
         self.assertTrue(result.ok)
         self.assertFalse(z_warning_seen[0], "No warning when Z >= 0")
+
+    def test_agent_blocks_clear_after_extrude(self):
+        """Agent blocks clear calls after first extrude to prevent restart loops."""
+        backend = make_mock_backend()
+        call_count = [0]
+        clear_blocked = [False]
+
+        def mock_llm_call(*, model, system, messages, tools, max_tokens, temperature):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First: extrude (builds something)
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "e1", "name": "extrude",
+                     "input": {"sketch_name": "S1", "distance": 10,
+                               "operation": "NewBodyFeatureOperation"}},
+                ], stop_reason="tool_use")
+            elif call_count[0] == 2:
+                # Second: try to clear (should be blocked)
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "c1", "name": "clear", "input": {}},
+                ], stop_reason="tool_use")
+            else:
+                # Check that clear was blocked
+                last_user_msg = messages[-1]
+                content = last_user_msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                            inner = item.get("content", "")
+                            if isinstance(inner, str) and "BLOCKED" in inner:
+                                clear_blocked[0] = True
+                return self._make_llm_response([
+                    {"type": "text", "text": "OK, continuing without restart."},
+                ])
+
+        agent = ToolDrivenAgent(
+            backend=backend, llm_call=mock_llm_call,
+            model="test-model", max_iterations=10, step_delay=0, verbose=False,
+        )
+        result = agent.run("Build something")
+        self.assertTrue(result.ok)
+        self.assertTrue(clear_blocked[0], "Clear should be blocked after first extrude")
+        # Verify clear was NOT actually called on the backend
+        backend._call.assert_not_called()
+
+    def test_agent_allows_initial_clear(self):
+        """Agent allows the first clear before any extrude."""
+        backend = make_mock_backend()
+        call_count = [0]
+
+        def mock_llm_call(*, model, system, messages, tools, max_tokens, temperature):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return self._make_llm_response([
+                    {"type": "tool_use", "id": "c1", "name": "clear", "input": {}},
+                ], stop_reason="tool_use")
+            else:
+                return self._make_llm_response([
+                    {"type": "text", "text": "Done."},
+                ])
+
+        agent = ToolDrivenAgent(
+            backend=backend, llm_call=mock_llm_call,
+            model="test-model", max_iterations=5, step_delay=0, verbose=False,
+        )
+        result = agent.run("Build a box")
+        self.assertTrue(result.ok)
+        # Clear should have been called on the backend
+        backend._call.assert_called_once_with("clear", {})
+
+    def test_system_prompt_no_restart_rule(self):
+        """System prompt forbids restarting after building starts."""
+        self.assertIn("NEVER RESTART", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("NEVER call `clear` again", TOOL_AGENT_SYSTEM_PROMPT)
+        self.assertIn("BLOCK", TOOL_AGENT_SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":

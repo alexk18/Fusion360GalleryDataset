@@ -52,26 +52,39 @@ Exception: `clear` can be called alone or with other independent tools.
 - Y: front/back (back at Y=0, front at +Y)
 - Z: up/down (floor at Z=0, up is +Z)
 
-## ONLY use XY plane — NEVER use XZ or YZ
-- ALWAYS use `XY` or `XY@<offset>` as the sketch plane.
-- The XY plane is the only plane with predictable coordinate mapping:
-  - Sketch X → World X
-  - Sketch Y → World Y
-  - Plane offset → World Z (height)
-  - Extrude goes along +Z
-- XZ and YZ planes have inverted coordinate mappings in Fusion 360 that cause
-  parts to appear at negative Z (below the floor). NEVER use them.
-- To build vertical walls or side features, use XY plane at the correct Z offset
-  and shape the profile in X/Y.
+## Plane coordinate mapping (MEMORIZE THIS)
+
+| Plane      | Sketch X → | Sketch Y → | Extrude → | Typical use                    |
+|------------|-----------|-----------|-----------|--------------------------------|
+| `XY@Z_off` | World X   | World Y   | +Z (up)   | Bodies, floors, tabletops      |
+| `XZ@Y_off` | World X   | World Z   | +Y (front)| Wheels, front/back panels      |
+| `YZ@X_off` | World Y   | World Z   | +X (right)| Side panels, side features     |
+
+**Default to XY plane** for most geometry. Use XZ or YZ only when you need sideways extrusion
+(e.g., wheels, axles, side panels).
+
+### Key rules for XZ and YZ planes:
+- On XZ plane: sketch Y maps to World Z. **Keep sketch Y >= 0** to stay above the floor.
+- On YZ plane: sketch Y maps to World Z. **Keep sketch Y >= 0** to stay above the floor.
+- The plane offset sets position along the extrude axis (Y for XZ, X for YZ).
+- After extruding on XZ or YZ, call `get_model_state` to verify coordinates are correct.
+
+### Wheel example (XZ plane):
+A car wheel at rear-left, radius=8cm, thickness=5cm, axle at Y=-30, Z=8:
+  create_sketch("XZ@-30") → add_circle(center_x=0, center_y=8, radius=8) → extrude(5, Join)
+  This places wheel center at world (0, -30, 8), extending from Y=-30 to Y=-25.
 
 ## Positioning rules (CRITICAL)
-- **XY@Z sketch**: Drawing at (cx, cy) means world position (cx, cy, Z). Extrude distance D creates geometry from Z to Z+D.
 - **ALL geometry must have Z >= 0**. Nothing below the floor.
-- **To stack parts**: If body A ends at z_max=10, next sketch at "XY@10" (or "XY@9.5" for Join overlap).
+- **XY@Z sketch**: Drawing at (cx, cy) → world (cx, cy, Z). Extrude D → body from Z to Z+D.
+- **XZ@Y sketch**: Drawing at (cx, cy) → world (cx, Y, cy). Extrude D → body from Y to Y+D.
+- **YZ@X sketch**: Drawing at (cx, cy) → world (X, cx, cy). Extrude D → body from X to X+D.
+- **To stack vertically**: If body A has z_max=10, sketch at "XY@10" (or "XY@9.5" for Join overlap).
 - **Legs/supports**: Sketch at "XY@0", extrude upward. E.g., 40cm tall legs → extrude(40).
-- **Tabletop on legs**: If legs end at Z=40, sketch at "XY@39.5" (overlap), extrude 3.5cm → top at Z=43.
+- **Tabletop on legs**: If legs end at Z=40, sketch at "XY@39.5" (overlap), extrude 3.5cm.
 - **Symmetric parts**: Mirror X or Y coordinates. E.g., legs at (cx=-20, cy=-15) and (cx=20, cy=-15).
 - **Never guess coordinates** — calculate from dimensions and existing geometry.
+- After every extrude, the system checks for negative Z. If you see a Z-WARNING, fix the part.
 
 ## Planning before building
 Before calling any tool, plan the entire object decomposition in a text block:
@@ -79,6 +92,12 @@ Before calling any tool, plan the entire object decomposition in a text block:
 2. For each part, calculate exact coordinates: start Z, end Z, center X/Y, width, height
 3. Determine build order: base/largest part first, then attached parts
 4. Verify that all Z values are >= 0
+
+## NEVER RESTART — fix forward
+- Call `clear` ONCE at the very beginning. After that, NEVER call `clear` again.
+- If something looks wrong in a screenshot, fix it by adding corrective geometry.
+- Restarting wastes iterations. You have a limited budget — use it to build, not to redo.
+- The system will BLOCK additional clear calls after the first extrude.
 
 ## Workflow
 1. Call `clear` to reset the model.
@@ -98,11 +117,15 @@ Before calling any tool, plan the entire object decomposition in a text block:
 - Each screenshot auto-fits the camera to show the entire model.
 - If you see parts below the floor (negative Z) in a screenshot, something is wrong — fix it.
 
-## JoinFeatureOperation overlap rules
+## JoinFeatureOperation overlap rules (prevents floating parts)
 - The new extrusion MUST volumetrically intersect with an existing body by at least 0.5cm.
 - For a part on TOP: sketch plane = target z_max - 0.5
-- For a part BESIDE: the extrude profile should overlap the existing body footprint by ≥0.5cm.
-- If Join fails, check coordinates and retry with corrected overlap.
+- For a part BESIDE: the sketch profile must overlap the existing body's footprint in that plane by ≥0.5cm.
+- For a wheel on side of body: the extrude range must overlap the body's Y or X range by ≥0.5cm.
+- If Join fails or part appears detached, call `get_bodies` to check body count.
+  If body count increased unexpectedly, the Join failed → fix overlap and retry.
+- **Common mistake**: Placing a part entirely outside the existing body. Always verify that
+  at least 0.5cm of the new extrusion overlaps with existing geometry in all 3 axes.
 
 ## Sketch rules
 - Each sketch has exactly ONE profile. Create a new sketch for each separate extrusion.
@@ -116,38 +139,31 @@ Before calling any tool, plan the entire object decomposition in a text block:
 - Keep ALL geometry above Z=0 (floor level).
 - Center the object around X=0, Y=0 when possible.
 
-## Example: Building a simple table (height=40cm, top=50x35cm, legs=3x3cm)
+## Example 1: Table (XY plane only)
 
 Plan:
-- 4 legs: 3x3cm cross-section, Z=0 to Z=40, at corners of a 44x29cm rectangle
-- 1 tabletop: 50x35cm, 3cm thick, Z=39.5 to Z=43 (0.5cm overlap with legs)
+- 4 legs: 3x3cm, Z=0→40, at corners of 44x29cm rectangle
+- 1 tabletop: 50x35cm, 3cm thick, Z=39.5→43 (0.5cm overlap)
 - All Z >= 0 ✓
 
-Step 1: clear
-  clear()
+Steps: clear → create_sketch("XY@0") → add_rectangle(cx=-22,cy=-13,w=3,h=3) → extrude(40, NewBody)
+→ screenshot + get_model_state → [repeat for 3 more legs] → screenshot
+→ create_sketch("XY@39.5") → add_rectangle(cx=0,cy=0,w=50,h=35) → extrude(3.5, Join)
+→ screenshot + get_model_state
 
-Step 2: create sketch for leg 1
-  create_sketch("XY@0") → returns sketch_name
+## Example 2: Car with wheels (XY + XZ planes)
 
-Step 3: draw leg 1 profile
-  add_rectangle(sketch_name, cx=-22, cy=-13, w=3, h=3)
+Plan:
+- Body: 180×80cm, 30cm tall, Z=10→40 (raised for wheel clearance). XY plane.
+- Cabin: 80×70cm, 25cm tall, Z=39.5→64.5. XY plane, Join.
+- 4 wheels: radius=15cm, thickness=8cm, centers at Z=15. XZ plane.
+  - Front-left:  XZ@-36, cx=-70, cy=15 (cy=Z=15), extrude 8 toward +Y. Join.
+  - Front-right: XZ@36, cx=-70, cy=15, extrude -8 toward -Y. Or XZ@28, extrude 8.
+  - Rear-left:   XZ@-36, cx=70, cy=15, extrude 8. Join.
+  - Rear-right:  XZ@28, cx=70, cy=15, extrude 8. Join.
+- All Z >= 0 ✓ (wheel centers at Z=15, bottom at Z=0)
 
-Step 4: extrude leg 1
-  extrude(sketch_name, distance=40, operation=NewBodyFeatureOperation)
-
-Step 5: verify base
-  get_model_state() + screenshot()
-
-Step 6-8: repeat for legs 2-4 (each: create_sketch → add_rectangle → extrude)
-
-Step 9: verify all legs
-  screenshot()
-
-Step 10-12: build tabletop
-  create_sketch("XY@39.5") → add_rectangle(cx=0,cy=0,w=50,h=35) → extrude(3.5, JoinFeatureOperation)
-
-Step 13: final verification
-  get_model_state() + screenshot()
+Key: wheels use XZ plane so circles extrude sideways (along Y), not upward.
 """
 
 
@@ -219,6 +235,7 @@ class ToolDrivenAgent:
         ]
 
         tool_calls_made = 0
+        has_extruded = False  # Track whether first extrude happened (for clear-blocking)
 
         for iteration in range(1, self.max_iterations + 1):
             result.iterations = iteration
@@ -263,14 +280,32 @@ class ToolDrivenAgent:
                 tool_input = block.get("input", {})
                 tool_id = block.get("id", "")
 
-                # Execute
-                dispatch_result = self.dispatcher.dispatch(tool_name, tool_input)
+                # Block clear after first extrude to prevent restart loops
+                if tool_name == "clear" and has_extruded:
+                    dispatch_result = {
+                        "ok": False,
+                        "error": (
+                            "BLOCKED: clear is not allowed after building has started. "
+                            f"You have {self.max_iterations - iteration} iterations remaining. "
+                            "Fix issues by adding corrective geometry, not by restarting."
+                        ),
+                    }
+                    if self.verbose:
+                        print(f" {tool_name}=BLOCKED", end="", flush=True)
+                else:
+                    # Execute
+                    dispatch_result = self.dispatcher.dispatch(tool_name, tool_input)
+
                 tool_calls_made += 1
 
-                # Log
+                # Track first successful extrude
                 is_ok = dispatch_result.get("ok", False)
+                if tool_name == "extrude" and is_ok:
+                    has_extruded = True
+
+                # Log
                 action = "ok" if is_ok else "error"
-                if self.verbose:
+                if self.verbose and tool_name != "clear":
                     print(f" {tool_name}={action}", end="", flush=True)
 
                 result.tool_calls.append({
@@ -442,9 +477,9 @@ class ToolDrivenAgent:
                         f"⚠ WARNING: Model has geometry below floor level! "
                         f"Bounding box z_min = {z_min:.2f} cm. "
                         f"All geometry should be at Z >= 0. "
-                        f"This usually means you used an XZ or YZ plane, or placed a sketch at a negative Z offset. "
-                        f"Use ONLY 'XY' or 'XY@<positive_offset>' planes. "
-                        f"Consider clearing and rebuilding the affected part at the correct Z position."
+                        f"This usually means you used an XZ or YZ plane incorrectly, "
+                        f"or placed a sketch at a negative Z offset. "
+                        f"Do NOT restart — continue building and compensate with corrective geometry."
                     )
         except Exception:
             pass
