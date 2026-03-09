@@ -16,9 +16,12 @@ CREATE_FAMILIES = (
     "profile_driven_symmetric",
     "rotational_bodies",
     "unsupported_smooth_freeform",
+    "unknown_best_effort",
 )
 
-CREATE_OUTCOMES = ("exact", "lowpoly_approx", "blocked")
+CREATE_OUTCOMES = ("exact", "lowpoly_approx", "best_effort", "blocked")
+
+SCENARIO_TYPES = ("single_object", "assembly", "multi_object", "scene_or_environment", "unknown")
 
 
 @dataclass
@@ -51,6 +54,9 @@ class StructuralBuildSpec:
     required_capabilities: List[str] = field(default_factory=list)
     confidence_notes: List[str] = field(default_factory=list)
     blocked_reason: str = ""
+    subtype: str = ""
+    scenario_type: str = "single_object"
+    routing_confidence: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -68,6 +74,9 @@ class StructuralBuildSpec:
             "required_capabilities": list(self.required_capabilities or []),
             "confidence_notes": list(self.confidence_notes or []),
             "blocked_reason": self.blocked_reason,
+            "subtype": self.subtype,
+            "scenario_type": self.scenario_type,
+            "routing_confidence": self.routing_confidence,
         }
 
 

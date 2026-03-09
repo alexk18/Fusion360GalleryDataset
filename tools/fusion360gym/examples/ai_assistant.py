@@ -47,6 +47,8 @@ from cad.cad_structural_spec import validate_structural_spec
 from cad.cad_structural_planner import plan_structural_specs
 from cad.cad_structural_ranker import rank_structural_specs, rank_dsl_candidates
 from cad.cad_dsl_synthesizer import synthesize_dsl_candidates_from_structural_spec
+from cad.cad_tool_agent import ToolDrivenAgent
+from cad.cad_backend import FusionCadBackend
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -106,9 +108,14 @@ DSL_CANDIDATE_COUNT = int(os.environ.get("DSL_CANDIDATE_COUNT", str(max(3, BEST_
 USE_LEGACY_BBOX_FALLBACK = os.environ.get("USE_LEGACY_BBOX_FALLBACK", "0").strip().lower() in (
     "1", "true", "yes", "on"
 )
+USE_TOOL_DRIVEN_AGENT = os.environ.get("USE_TOOL_DRIVEN_AGENT", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+TOOL_AGENT_MAX_ITERATIONS = int(os.environ.get("TOOL_AGENT_MAX_ITERATIONS", "30"))
+TOOL_AGENT_MODEL = os.environ.get("TOOL_AGENT_MODEL", "")
 
 # ---------------------------------------------------------------------------
-# Architect prompt вЂ” LLM decomposes objects into 3D bounding boxes
+# Architect prompt вЂ" LLM decomposes objects into 3D bounding boxes
 # ---------------------------------------------------------------------------
 
 CAD_DSL_PLANNER_PROMPT = r"""You are a strict CAD planner.
@@ -372,7 +379,7 @@ If the model looks correct, respond:
 {{"satisfied": true, "comment": "Brief assessment"}}
 
 If it needs fixes, describe WHAT is wrong in plain text. Do NOT generate coordinates
-or build commands вЂ” just explain the problems clearly.
+or build commands вЂ" just explain the problems clearly.
 {{"satisfied": false, "comment": "Detailed description of what is wrong and how to fix it"}}
 
 Return ONLY JSON. No markdown."""
@@ -407,7 +414,7 @@ Return ONLY JSON, no markdown:
   ]
 }
 Optional "features": only add if the object has leaning or splayed elements (e.g. chair backrest leaning back, splayed legs).
-- tilt: use primary_axis "x" for backward/forward lean (YZ plane), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ“12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
+- tilt: use primary_axis "x" for backward/forward lean (YZ plane), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ"12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
 - Omit "features" or use [] if no such elements.
 """
 
@@ -440,7 +447,7 @@ Return ONLY JSON, no markdown:
   ]
 }
 Optional "features": only add if the object has leaning or splayed elements (e.g. chair backrest leaning back).
-- tilt: primary_axis "x" for backward/forward (YZ), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ“12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
+- tilt: primary_axis "x" for backward/forward (YZ), "y" for left/right; direction "backward"|"forward"|"outward"; magnitude angle_deg 0вЂ"12; apply_to "slender_posts"|"slender_rails"|"legs"|"handles".
 - Omit "features" or use [] if none.
 """
 
@@ -498,7 +505,7 @@ Return ONLY JSON:
 
 
 # ---------------------------------------------------------------------------
-# Design Index вЂ” few-shot retrieval from curated / dataset examples
+# Design Index вЂ" few-shot retrieval from curated / dataset examples
 # ---------------------------------------------------------------------------
 
 class DesignIndex:
@@ -571,7 +578,7 @@ class DesignIndex:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic encoder вЂ” bounding boxes в†’ Fusion 360 Gym JSON plan
+# Deterministic encoder вЂ" bounding boxes в†’ Fusion 360 Gym JSON plan
 # ---------------------------------------------------------------------------
 
 def encode_bboxes_to_plan(parts, include_clear=True, include_refresh=False):
@@ -1172,7 +1179,52 @@ class FusionAIAssistant:
             )
             return response.choices[0].message.content
 
-    # -- Step A: Architect вЂ” decompose into bounding boxes --------------------
+    # -- Tool-driven agent (free-form LLM tool_use) --------------------------
+
+    def _make_tool_agent_llm_call(self):
+        """Create an LLM callable matching ToolDrivenAgent signature."""
+        if self.provider != "anthropic":
+            raise RuntimeError("Tool-driven agent requires Anthropic provider (LLM_PROVIDER=anthropic)")
+
+        def llm_call(*, model, system, messages, tools, max_tokens=4096, temperature=0.1):
+            return self.llm.messages.create(
+                model=model,
+                system=system,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        return llm_call
+
+    def _run_tool_driven_agent(self, user_request, images=None):
+        """Run the tool-driven agent for a user request. Returns (ok, result)."""
+        backend = FusionCadBackend(self.fusion)
+        agent_model = TOOL_AGENT_MODEL or self.model
+        agent = ToolDrivenAgent(
+            backend=backend,
+            llm_call=self._make_tool_agent_llm_call(),
+            model=agent_model,
+            max_iterations=TOOL_AGENT_MAX_ITERATIONS,
+            step_delay=STEP_DELAY,
+            verbose=True,
+        )
+        print(f"  [Tool Agent] model={agent_model}, max_iter={TOOL_AGENT_MAX_ITERATIONS}")
+        result = agent.run(user_request, images=images)
+        if result.ok:
+            print(f"\n  Tool agent OK: {result.steps_executed} tool calls in {result.iterations} iterations")
+            if result.final_state:
+                bodies = result.final_state.get("bodies", [])
+                if isinstance(bodies, list):
+                    print(f"  Bodies in model: {len(bodies)}")
+                    for b in bodies[:10]:
+                        name = b if isinstance(b, str) else b.get("name", str(b))
+                        print(f"    - {name}")
+        else:
+            print(f"\n  Tool agent failed: {result.error}")
+        return result.ok, result
+
+    # -- Step A: Architect вЂ" decompose into bounding boxes --------------------
 
     def decompose_object(self, user_request):
         similar = self._find_reference_designs(user_request, top_k=2)
@@ -1515,7 +1567,7 @@ class FusionAIAssistant:
         final_parts = self._sanitize_parts(out, target_dims=target_dims, symmetry=symmetry)
         return self._limit_parts_for_stability(final_parts, max_parts=12)
 
-    # -- Step B: Deterministic encoder вЂ” bboxes в†’ Gym commands ----------------
+    # -- Step B: Deterministic encoder вЂ" bboxes в†’ Gym commands ----------------
 
     @staticmethod
     def encode(parts, include_clear=True):
@@ -3812,7 +3864,7 @@ class FusionAIAssistant:
                 print("  Model approved the result!")
                 return original_parts
 
-            # Re-run architect with the critique вЂ” VLM never touches coordinates
+            # Re-run architect with the critique вЂ" VLM never touches coordinates
             print("  Re-running architect with feedback...\n")
             correction_request = (
                 f'Original request: "{user_request}"\n'
@@ -3866,12 +3918,15 @@ class FusionAIAssistant:
         print(sep)
         print("  Fusion 360 AI Assistant  (CAD DSL-first pipeline)")
         print(f"  Provider: {self.provider}  |  Model: {self.model}")
-        if USE_CAD_DSL_PLANNER:
+        if USE_TOOL_DRIVEN_AGENT:
+            print("  Pipeline: Tool-Driven Agent (LLM calls CAD tools directly via tool_use)")
+        elif USE_CAD_DSL_PLANNER:
             print("  Pipeline: Structural Spec -> family grammar DSL -> iterative tool-driven execute/inspect loop -> Fusion 360")
         else:
             print("  Pipeline: Architect LLM -> Deterministic Encoder -> Fusion 360")
         print("  Describe what you want to build in plain text. To extend current model: e.g. 'add armrests', 'make the back higher'.")
         print(f"  Visual review: {'ON' if self.review_enabled else 'OFF'}")
+        print(f"  Tool-driven agent: {'ON' if USE_TOOL_DRIVEN_AGENT else 'OFF'}")
         print(f"  CAD DSL planner: {'ON' if USE_CAD_DSL_PLANNER else 'OFF (legacy bbox mode)'}")
         print(f"  Legacy bbox fallback for vision: {'ON' if USE_LEGACY_BBOX_FALLBACK else 'OFF'}")
         print("  Commands: exit | clear | detach | relaunch | review on/off/status | save <name[.ext]> | ping | help")
@@ -4096,6 +4151,23 @@ class FusionAIAssistant:
                 if not images:
                     print("  Failed to read images from folder.\n")
                     continue
+                if USE_TOOL_DRIVEN_AGENT:
+                    print(f"\n  [Tool-Driven Agent] Building from folder ({len(images)} views)...\n")
+                    req = f"Build CAD model from folder: {folder}"
+                    try:
+                        ok, _ = self._run_tool_driven_agent(req, images=images)
+                    except Exception as ex:
+                        print(f"  Tool agent error: {ex}\n")
+                        ok = False
+                    if ok:
+                        self.last_parts = []
+                        self.last_cad_plan = None
+                        self.last_request = req
+                        self.last_images = images
+                        print("  Done.\n")
+                    else:
+                        print("  Tool agent did not complete successfully.\n")
+                    continue
                 if USE_CAD_DSL_PLANNER:
                     print(f"\n  [CAD DSL] Vision planning from folder ({len(images)} views)...\n")
                     req = f"Build CAD model from folder: {folder}"
@@ -4215,6 +4287,23 @@ class FusionAIAssistant:
                 images = self._load_images_from_paths([img_path])
                 if not images:
                     print("  Could not read image.\n")
+                    continue
+                if USE_TOOL_DRIVEN_AGENT:
+                    print(f"\n  [Tool-Driven Agent] Building from image...\n")
+                    req = f"Build CAD model from image: {path_str}"
+                    try:
+                        ok, _ = self._run_tool_driven_agent(req, images=images)
+                    except Exception as ex:
+                        print(f"  Tool agent error: {ex}\n")
+                        ok = False
+                    if ok:
+                        self.last_parts = []
+                        self.last_cad_plan = None
+                        self.last_request = req
+                        self.last_images = images
+                        print("  Done.\n")
+                    else:
+                        print("  Tool agent did not complete successfully.\n")
                     continue
                 if USE_CAD_DSL_PLANNER:
                     print("\n  [CAD DSL] Vision planning from image...\n")
@@ -4396,6 +4485,24 @@ class FusionAIAssistant:
             if not self.ensure_connection():
                 continue
 
+            # --- Tool-driven agent mode (free-form LLM tool_use) ---
+            if USE_TOOL_DRIVEN_AGENT:
+                print(f"\n  [Tool-Driven Agent] Building from request...\n")
+                try:
+                    ok, agent_result = self._run_tool_driven_agent(command_input)
+                except Exception as ex:
+                    print(f"  Tool agent error: {ex}\n")
+                    ok = False
+                if ok:
+                    self.last_parts = []
+                    self.last_cad_plan = None
+                    self.last_request = command_input
+                    self.last_images = []
+                    print("  Done.\n")
+                else:
+                    print("  Tool agent did not complete successfully.\n")
+                continue
+
             if USE_CAD_DSL_PLANNER:
                 has_existing_plan = bool(isinstance(self.last_cad_plan, dict) and self.last_cad_plan.get("steps"))
                 intent = self._intent_extend_or_new(command_input, has_existing_plan)
@@ -4434,7 +4541,7 @@ class FusionAIAssistant:
             parts = []
             intent = self._intent_extend_or_new(command_input, bool(self.last_parts))
             if intent == "extend" and self.last_parts:
-                # User wants to add to or modify the current model вЂ” revise, don't decompose from scratch
+                # User wants to add to or modify the current model вЂ" revise, don't decompose from scratch
                 print("\n  [Extend] Modifying current model per your request...\n")
                 try:
                     parts = self._revise_model_parts(self.last_parts, command_input)
