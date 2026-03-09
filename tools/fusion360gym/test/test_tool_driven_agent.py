@@ -595,5 +595,99 @@ class TestToolDrivenAgent(unittest.TestCase):
         self.assertIn("BLOCK", TOOL_AGENT_SYSTEM_PROMPT)
 
 
+# ---------------------------------------------------------------------------
+# Demo scenario tests
+# ---------------------------------------------------------------------------
+
+class TestDemoScenarios(unittest.TestCase):
+    def test_scenarios_registry(self):
+        """All expected scenarios are registered."""
+        from cad.demo_scenarios import SCENARIOS, list_scenarios
+        names = list_scenarios()
+        self.assertIn("bearing_housing", names)
+        self.assertIn("flanged_pipe", names)
+        self.assertIn("motor_mount", names)
+
+    def test_scenario_structure(self):
+        """Each scenario has required fields."""
+        from cad.demo_scenarios import SCENARIOS
+        required_keys = {"name", "description", "prompt", "expected_iterations", "expected_body_count", "key_features"}
+        for name, scenario in SCENARIOS.items():
+            for key in required_keys:
+                self.assertIn(key, scenario, f"Scenario '{name}' missing key '{key}'")
+
+    def test_bearing_housing_prompt_content(self):
+        """Bearing housing prompt has exact build instructions."""
+        from cad.demo_scenarios import SCENARIOS
+        prompt = SCENARIOS["bearing_housing"]["prompt"]
+        # Must reference all key operations
+        self.assertIn("create_sketch", prompt)
+        self.assertIn("add_rectangle", prompt)
+        self.assertIn("add_circle", prompt)
+        self.assertIn("extrude", prompt)
+        self.assertIn("CutFeatureOperation", prompt)
+        self.assertIn("JoinFeatureOperation", prompt)
+        self.assertIn("NewBodyFeatureOperation", prompt)
+        self.assertIn("fillet", prompt)
+        self.assertIn("screenshot", prompt)
+        # Must specify bolt holes
+        self.assertIn("bolt hole", prompt.lower().replace("bolt hole", "bolt hole"))
+        # Must specify shaft bore
+        self.assertIn("bore", prompt.lower())
+
+    def test_bearing_housing_has_exact_dimensions(self):
+        """Bearing housing prompt specifies exact numeric dimensions."""
+        from cad.demo_scenarios import SCENARIOS
+        prompt = SCENARIOS["bearing_housing"]["prompt"]
+        # Key dimensions that must be present
+        self.assertIn("24", prompt)    # base width
+        self.assertIn("12", prompt)    # base height
+        self.assertIn("2.5", prompt)   # base thickness
+        self.assertIn("radius 5", prompt)   # boss radius
+        self.assertIn("radius 2.5", prompt) # bore radius
+        self.assertIn("radius 0.8", prompt) # bolt hole radius
+
+    def test_bearing_housing_has_step_numbers(self):
+        """Bearing housing prompt has numbered build steps."""
+        from cad.demo_scenarios import SCENARIOS
+        prompt = SCENARIOS["bearing_housing"]["prompt"]
+        for step in range(1, 11):
+            self.assertIn(f"Step {step}", prompt, f"Missing Step {step}")
+
+    def test_flanged_pipe_has_cut_operations(self):
+        """Flanged pipe scenario uses Cut for bore and bolt holes."""
+        from cad.demo_scenarios import SCENARIOS
+        prompt = SCENARIOS["flanged_pipe"]["prompt"]
+        self.assertIn("CutFeatureOperation", prompt)
+        self.assertIn("through bore", prompt.lower().replace("through-bore", "through bore").replace("through bore", "through bore"))
+        self.assertIn("bolt hole", prompt.lower().replace("bolt hole", "bolt hole"))
+
+    def test_motor_mount_uses_xz_plane(self):
+        """Motor mount scenario uses XZ plane for vertical back plate."""
+        from cad.demo_scenarios import SCENARIOS
+        prompt = SCENARIOS["motor_mount"]["prompt"]
+        self.assertIn("XZ@", prompt)
+        self.assertIn("back plate", prompt.lower())
+        self.assertIn("gusset", prompt.lower())
+        self.assertIn("add_polygon", prompt)
+
+    def test_all_scenarios_within_iteration_budget(self):
+        """All scenarios should fit within 50 iterations."""
+        from cad.demo_scenarios import SCENARIOS
+        for name, scenario in SCENARIOS.items():
+            self.assertLessEqual(
+                scenario["expected_iterations"], 50,
+                f"Scenario '{name}' exceeds 50-iteration budget",
+            )
+
+    def test_get_scenario_helper(self):
+        """get_scenario returns correct scenario or raises KeyError."""
+        from cad.demo_scenarios import get_scenario
+        s = get_scenario("bearing_housing")
+        self.assertEqual(s["name"], "Pillow Block Bearing Housing")
+        with self.assertRaises(KeyError):
+            get_scenario("nonexistent")
+
+
 if __name__ == "__main__":
     unittest.main()
