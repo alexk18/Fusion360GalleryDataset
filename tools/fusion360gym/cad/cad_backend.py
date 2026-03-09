@@ -7,7 +7,7 @@ LLM never calls Fusion commands directly. Executor/operator use this contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .cad_capabilities import CapabilityModel, default_capability_model
 
@@ -423,13 +423,56 @@ class FusionCadBackend:
             return self._ok(self.client.update_extrude(feature_name, distance))
         return self._ok(self._call("update_extrude", {"feature_name": feature_name, "distance": float(distance)}))
 
+    # ------------------------------------------------------------------
+    # Fillet / Chamfer / Shell
+    # ------------------------------------------------------------------
+
+    def fillet(
+        self,
+        body_name: str,
+        radius: float,
+        edge_indices: Optional[List[int]] = None,
+    ) -> BackendResult:
+        if not self.capabilities.supports("fillet"):
+            return self._unsupported("fillet")
+        payload: Dict[str, Any] = {"body_name": body_name, "radius": float(radius)}
+        if edge_indices:
+            payload["edge_indices"] = edge_indices
+        return self._call_checked("add_fillet", payload)
+
+    def chamfer(
+        self,
+        body_name: str,
+        distance: float,
+        edge_indices: Optional[List[int]] = None,
+    ) -> BackendResult:
+        if not self.capabilities.supports("chamfer"):
+            return self._unsupported("chamfer")
+        payload: Dict[str, Any] = {"body_name": body_name, "distance": float(distance)}
+        if edge_indices:
+            payload["edge_indices"] = edge_indices
+        return self._call_checked("add_chamfer", payload)
+
+    def shell(
+        self,
+        body_name: str,
+        thickness: float,
+        remove_face: str = "top",
+    ) -> BackendResult:
+        if not self.capabilities.supports("shell"):
+            return self._unsupported("shell")
+        payload: Dict[str, Any] = {
+            "body_name": body_name,
+            "thickness": float(thickness),
+            "remove_face": remove_face,
+        }
+        return self._call_checked("add_shell", payload)
+
+    def get_edges_by_body(self, body_name: str) -> BackendResult:
+        """Get edge positions for a specific body."""
+        return self._call_checked("get_edges_by_body", {"body_name": body_name})
+
     # Reserved extension points (declared but unsupported in current backend)
-    def fillet(self, *_args, **_kwargs) -> BackendResult:
-        return self._unsupported("fillet")
-
-    def chamfer(self, *_args, **_kwargs) -> BackendResult:
-        return self._unsupported("chamfer")
-
     def revolve(self, *_args, **_kwargs) -> BackendResult:
         return self._unsupported("revolve")
 

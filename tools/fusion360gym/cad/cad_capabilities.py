@@ -88,20 +88,22 @@ def default_capability_model() -> CapabilityModel:
         "active_construction_context": Capability(STATUS_SUPPORTED, "derived from feature/sketch recency"),
         "screenshot": Capability(STATUS_SUPPORTED),
         "bbox_query": Capability(STATUS_SUPPORTED),
-        # Advanced operations (declared but unsupported now)
-        "fillet": Capability(STATUS_UNSUPPORTED, "dsl-level only; execution not implemented"),
-        "chamfer": Capability(STATUS_UNSUPPORTED, "dsl-level placeholder"),
-        "revolve": Capability(STATUS_UNSUPPORTED, "dsl-level placeholder"),
-        "loft": Capability(STATUS_UNSUPPORTED, "dsl-level only; execution not implemented"),
-        "sweep": Capability(STATUS_UNSUPPORTED, "dsl-level only; execution not implemented"),
+        # Advanced operations
+        "fillet": Capability(STATUS_SUPPORTED, "fillet edges of a body with constant radius"),
+        "chamfer": Capability(STATUS_SUPPORTED, "chamfer edges of a body with equal distance"),
+        "shell": Capability(STATUS_SUPPORTED, "shell (hollow out) a body with wall thickness"),
+        "edge_query_by_body": Capability(STATUS_SUPPORTED, "get edge indices and positions for a body"),
+        "revolve": Capability(STATUS_UNSUPPORTED, "not implemented"),
+        "loft": Capability(STATUS_UNSUPPORTED, "not implemented"),
+        "sweep": Capability(STATUS_UNSUPPORTED, "not implemented"),
         "sketch_edit_existing": Capability(
             STATUS_PARTIAL,
             "existing sketch is authoritative by name; geometry edit-in-place is not implemented",
         ),
         "suppress_feature": Capability(STATUS_UNSUPPORTED, "not implemented"),
         "delete_feature": Capability(STATUS_UNSUPPORTED, "not implemented"),
-        "edge_query": Capability(STATUS_UNSUPPORTED, "not implemented"),
-        "face_query": Capability(STATUS_UNSUPPORTED, "not implemented"),
+        "edge_query": Capability(STATUS_SUPPORTED, "edge count per body; detailed query via get_edges_by_body"),
+        "face_query": Capability(STATUS_PARTIAL, "face count per body; no individual face selection yet"),
     }
     return CapabilityModel(capabilities=caps)
 

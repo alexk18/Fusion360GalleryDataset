@@ -325,6 +325,45 @@ class CommandRunner():
             category="feature",
         )
 
+        # Fillet / Chamfer / Shell
+        self._register(
+            "add_fillet",
+            "Add fillet (rounded edges) to a body",
+            lambda data: self.sketch_extrusion.add_fillet(data),
+            schema=CommandSchema(
+                required={"body_name": "str", "radius": "number"},
+                optional={"edge_indices": "list"},
+            ),
+            category="feature",
+        )
+        self._register(
+            "add_chamfer",
+            "Add chamfer (beveled edges) to a body",
+            lambda data: self.sketch_extrusion.add_chamfer(data),
+            schema=CommandSchema(
+                required={"body_name": "str", "distance": "number"},
+                optional={"edge_indices": "list"},
+            ),
+            category="feature",
+        )
+        self._register(
+            "add_shell",
+            "Shell (hollow out) a body",
+            lambda data: self.sketch_extrusion.add_shell(data),
+            schema=CommandSchema(
+                required={"body_name": "str", "thickness": "number"},
+                optional={"remove_face": "str"},
+            ),
+            category="feature",
+        )
+        self._register(
+            "get_edges_by_body",
+            "Get edge indices and positions for a body",
+            lambda data: self.sketch_extrusion.get_edges_by_body(data),
+            schema=CommandSchema(required={"body_name": "str"}),
+            category="query",
+        )
+
         # Face extrusion flow
         self._register(
             "set_target",

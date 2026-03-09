@@ -253,6 +253,85 @@ CAD_TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    # === FINISHING OPERATIONS ===
+    {
+        "name": "fillet",
+        "description": (
+            "Round (fillet) edges of a body with a constant radius. "
+            "Applies to all edges by default, or specific edge indices if provided. "
+            "Use get_edges_by_body first to see available edges. "
+            "Keep radius small relative to body size (e.g. 0.2-1cm) to avoid failures."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "body_name": {"type": "string", "description": "Name of the body to fillet (e.g. 'Body1')"},
+                "radius": {"type": "number", "description": "Fillet radius in cm (keep small, e.g. 0.2-1.0)"},
+                "edge_indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Optional: specific edge indices to fillet. Omit to fillet all edges.",
+                },
+            },
+            "required": ["body_name", "radius"],
+        },
+    },
+    {
+        "name": "chamfer",
+        "description": (
+            "Bevel (chamfer) edges of a body with equal distance. "
+            "Applies to all edges by default, or specific edge indices if provided. "
+            "Use get_edges_by_body first to see available edges."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "body_name": {"type": "string", "description": "Name of the body to chamfer"},
+                "distance": {"type": "number", "description": "Chamfer distance in cm"},
+                "edge_indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Optional: specific edge indices to chamfer. Omit for all edges.",
+                },
+            },
+            "required": ["body_name", "distance"],
+        },
+    },
+    {
+        "name": "shell",
+        "description": (
+            "Hollow out a body, leaving walls of specified thickness. "
+            "Optionally removes the top or bottom face (default: top). "
+            "Useful for creating containers, enclosures, or thin-walled parts."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "body_name": {"type": "string", "description": "Name of the body to shell"},
+                "thickness": {"type": "number", "description": "Wall thickness in cm"},
+                "remove_face": {
+                    "type": "string",
+                    "enum": ["top", "bottom", "none"],
+                    "description": "Which face to remove: 'top' (highest Z), 'bottom' (lowest Z), 'none' (closed shell). Default: 'top'.",
+                },
+            },
+            "required": ["body_name", "thickness"],
+        },
+    },
+    {
+        "name": "get_edges_by_body",
+        "description": (
+            "Get edge indices and endpoint positions for a specific body. "
+            "Use this before fillet/chamfer to identify which edges to select."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "body_name": {"type": "string", "description": "Name of the body to query"},
+            },
+            "required": ["body_name"],
+        },
+    },
     # === MODEL MANAGEMENT ===
     {
         "name": "clear",
@@ -432,6 +511,30 @@ class ToolDispatcher:
         result = self.backend._call("clear", {})
         return BackendResult(ok=True, response=result)
 
+    def _handle_fillet(self, inp: Dict[str, Any]) -> BackendResult:
+        return self.backend.fillet(
+            body_name=inp["body_name"],
+            radius=inp["radius"],
+            edge_indices=inp.get("edge_indices"),
+        )
+
+    def _handle_chamfer(self, inp: Dict[str, Any]) -> BackendResult:
+        return self.backend.chamfer(
+            body_name=inp["body_name"],
+            distance=inp["distance"],
+            edge_indices=inp.get("edge_indices"),
+        )
+
+    def _handle_shell(self, inp: Dict[str, Any]) -> BackendResult:
+        return self.backend.shell(
+            body_name=inp["body_name"],
+            thickness=inp["thickness"],
+            remove_face=inp.get("remove_face", "top"),
+        )
+
+    def _handle_get_edges_by_body(self, inp: Dict[str, Any]) -> BackendResult:
+        return self.backend.get_edges_by_body(body_name=inp["body_name"])
+
     # Handler dispatch table
     _handlers: Dict[str, Any] = {
         "create_sketch": _handle_create_sketch,
@@ -450,4 +553,8 @@ class ToolDispatcher:
         "query_bounding_box": _handle_query_bounding_box,
         "screenshot": _handle_screenshot,
         "clear": _handle_clear,
+        "fillet": _handle_fillet,
+        "chamfer": _handle_chamfer,
+        "shell": _handle_shell,
+        "get_edges_by_body": _handle_get_edges_by_body,
     }

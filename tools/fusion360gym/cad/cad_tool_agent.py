@@ -133,11 +133,25 @@ Before calling any tool, plan the entire object decomposition in a text block:
 - add_rectangle/add_circle/add_polygon automatically close the profile. Do NOT call close_profile after them.
 - Only call close_profile when building manual shapes with add_line.
 
+## Finishing operations: fillet, chamfer, shell
+After building the main geometry, use finishing operations to improve visual quality:
+
+- **fillet(body_name, radius)**: Rounds edges. Use small radius (0.2-1.0cm) relative to body size.
+  Apply AFTER all extrudes are done. Too-large radius will fail.
+- **chamfer(body_name, distance)**: Bevels edges. Same size rules as fillet.
+- **shell(body_name, thickness, remove_face)**: Hollows out a body. Great for cups, containers, enclosures.
+  remove_face="top" removes the top face (default), "bottom" for bottom, "none" for closed shell.
+- **get_edges_by_body(body_name)**: See edge indices before applying fillet/chamfer to specific edges.
+
+Best practice: build ALL geometry first, then apply fillet/chamfer as finishing touches.
+If fillet/chamfer fails, reduce the radius/distance or skip it — the model is still valid.
+
 ## Quality guidelines
 - Build 5-10 major parts for most objects. Add meaningful detail.
 - Use realistic proportions and real-world scale in cm.
 - Keep ALL geometry above Z=0 (floor level).
 - Center the object around X=0, Y=0 when possible.
+- Apply fillet to body edges as a final step for polished results.
 
 ## Example 1: Table (XY plane only)
 

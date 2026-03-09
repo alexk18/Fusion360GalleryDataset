@@ -34,6 +34,10 @@ def make_mock_backend():
     backend.get_body_relations.return_value = BackendResult(ok=True, response={"data": []})
     backend.query_bounding_box.return_value = BackendResult(ok=True, response={"data": {}})
     backend.screenshot.return_value = BackendResult(ok=True, response={"data": "ok"})
+    backend.fillet.return_value = BackendResult(ok=True, response={"data": {"feature_name": "Fillet1"}})
+    backend.chamfer.return_value = BackendResult(ok=True, response={"data": {"feature_name": "Chamfer1"}})
+    backend.shell.return_value = BackendResult(ok=True, response={"data": {"feature_name": "Shell1"}})
+    backend.get_edges_by_body.return_value = BackendResult(ok=True, response={"data": {"edges": [], "edge_count": 12}})
     backend._call.return_value = {"data": "ok"}
     return backend
 
@@ -45,7 +49,7 @@ def make_mock_backend():
 class TestToolDefinitions(unittest.TestCase):
     def test_tool_count(self):
         tools = get_tool_definitions()
-        self.assertEqual(len(tools), 16)
+        self.assertEqual(len(tools), 20)
 
     def test_all_tools_have_required_fields(self):
         for tool in CAD_TOOLS:
@@ -61,6 +65,11 @@ class TestToolDefinitions(unittest.TestCase):
         names = {t["name"] for t in CAD_TOOLS}
         essential = {"create_sketch", "extrude", "add_rectangle", "add_circle", "clear", "get_bodies"}
         self.assertTrue(essential.issubset(names), f"Missing: {essential - names}")
+
+    def test_finishing_tools_present(self):
+        names = {t["name"] for t in CAD_TOOLS}
+        finishing = {"fillet", "chamfer", "shell", "get_edges_by_body"}
+        self.assertTrue(finishing.issubset(names), f"Missing: {finishing - names}")
 
     def test_extrude_operations_enum(self):
         extrude_tool = next(t for t in CAD_TOOLS if t["name"] == "extrude")
@@ -171,6 +180,36 @@ class TestToolDispatcher(unittest.TestCase):
         result = self.dispatcher.dispatch("screenshot", {})
         self.assertFalse(result["ok"])
         self.assertIn("no viewport", result["error"])
+
+    def test_dispatch_fillet(self):
+        result = self.dispatcher.dispatch("fillet", {"body_name": "Body1", "radius": 0.5})
+        self.assertTrue(result["ok"])
+        self.backend.fillet.assert_called_once_with(body_name="Body1", radius=0.5, edge_indices=None)
+
+    def test_dispatch_fillet_with_edges(self):
+        result = self.dispatcher.dispatch("fillet", {"body_name": "Body1", "radius": 0.3, "edge_indices": [0, 2, 5]})
+        self.assertTrue(result["ok"])
+        self.backend.fillet.assert_called_once_with(body_name="Body1", radius=0.3, edge_indices=[0, 2, 5])
+
+    def test_dispatch_chamfer(self):
+        result = self.dispatcher.dispatch("chamfer", {"body_name": "Body1", "distance": 0.5})
+        self.assertTrue(result["ok"])
+        self.backend.chamfer.assert_called_once_with(body_name="Body1", distance=0.5, edge_indices=None)
+
+    def test_dispatch_shell(self):
+        result = self.dispatcher.dispatch("shell", {"body_name": "Body1", "thickness": 0.3})
+        self.assertTrue(result["ok"])
+        self.backend.shell.assert_called_once_with(body_name="Body1", thickness=0.3, remove_face="top")
+
+    def test_dispatch_shell_remove_bottom(self):
+        result = self.dispatcher.dispatch("shell", {"body_name": "Body1", "thickness": 0.5, "remove_face": "bottom"})
+        self.assertTrue(result["ok"])
+        self.backend.shell.assert_called_once_with(body_name="Body1", thickness=0.5, remove_face="bottom")
+
+    def test_dispatch_get_edges_by_body(self):
+        result = self.dispatcher.dispatch("get_edges_by_body", {"body_name": "Body1"})
+        self.assertTrue(result["ok"])
+        self.backend.get_edges_by_body.assert_called_once_with(body_name="Body1")
 
 
 # ---------------------------------------------------------------------------

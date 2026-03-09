@@ -1009,3 +1009,215 @@ class CommandSketchExtrusion(CommandBase):
             )
         except Exception as ex:
             return self.runner.return_failure(f"get_active_construction_context failed: {ex}")
+
+    # ------------------------------------------------------------------
+    # Fillet / Chamfer / Shell
+    # ------------------------------------------------------------------
+
+    def _find_body_by_name(self, body_name):
+        """Find a BRepBody by name (or partial match). Returns (body, body_id) or (None, None)."""
+        body_records, body_objects = self._collect_bodies()
+        # Exact match on display name
+        for rec in body_records:
+            bid = str(rec.get("id") or "")
+            obj = body_objects.get(bid)
+            if obj is not None and str(getattr(obj, "name", "")) == body_name:
+                return obj, bid
+        # Fallback: first body if body_name is "Body1" or similar default
+        if body_records and body_name.lower() in ("body1", "body 1", "body_1", "last"):
+            bid = str(body_records[-1].get("id") or "")
+            return body_objects.get(bid), bid
+        return None, None
+
+    def _collect_edges_for_body(self, body):
+        """Collect edge info from a BRepBody. Returns list of edge dicts + ObjectCollection."""
+        edge_infos = []
+        edge_collection = adsk.core.ObjectCollection.create()
+        try:
+            for i in range(body.edges.count):
+                edge = body.edges.item(i)
+                edge_collection.add(edge)
+                info = {"index": i}
+                try:
+                    sp = edge.startVertex.geometry if edge.startVertex else None
+                    ep = edge.endVertex.geometry if edge.endVertex else None
+                    if sp and ep:
+                        info["start"] = {"x": round(sp.x, 3), "y": round(sp.y, 3), "z": round(sp.z, 3)}
+                        info["end"] = {"x": round(ep.x, 3), "y": round(ep.y, 3), "z": round(ep.z, 3)}
+                        info["midZ"] = round((sp.z + ep.z) / 2, 3)
+                except Exception:
+                    pass
+                edge_infos.append(info)
+        except Exception:
+            pass
+        return edge_infos, edge_collection
+
+    def add_fillet(self, data):
+        """Add fillet (rounded edges) to a body.
+        Required: body_name (str), radius (float in cm).
+        Optional: edge_indices (list of int) to fillet specific edges, otherwise all edges."""
+        if data is None or "body_name" not in data or "radius" not in data:
+            return self.runner.return_failure("add_fillet requires body_name and radius")
+        body_name = str(data["body_name"])
+        radius = float(data["radius"])
+        if radius <= 0:
+            return self.runner.return_failure("fillet radius must be > 0")
+
+        body, bid = self._find_body_by_name(body_name)
+        if body is None:
+            return self.runner.return_failure(f"body '{body_name}' not found")
+
+        edge_infos, all_edges = self._collect_edges_for_body(body)
+        if all_edges.count == 0:
+            return self.runner.return_failure("body has no edges")
+
+        # Select specific edges or all
+        edge_indices = data.get("edge_indices")
+        edges_to_fillet = adsk.core.ObjectCollection.create()
+        if edge_indices and isinstance(edge_indices, list):
+            for idx in edge_indices:
+                idx = int(idx)
+                if 0 <= idx < body.edges.count:
+                    edges_to_fillet.add(body.edges.item(idx))
+            if edges_to_fillet.count == 0:
+                return self.runner.return_failure("no valid edge indices provided")
+        else:
+            edges_to_fillet = all_edges
+
+        try:
+            comp = self.design_state.reconstruction.component
+            fillets = comp.features.filletFeatures
+            fillet_input = fillets.createInput()
+            fillet_input.addConstantRadiusEdgeSet(
+                edges_to_fillet,
+                adsk.core.ValueInput.createByReal(radius),
+                True  # isTangentChain
+            )
+            fillet = fillets.add(fillet_input)
+            return self.runner.return_success({
+                "feature_name": str(getattr(fillet, "name", "")),
+                "body": bid,
+                "radius": radius,
+                "edges_filleted": edges_to_fillet.count,
+            })
+        except Exception as ex:
+            return self.runner.return_failure(f"fillet failed: {ex}")
+
+    def add_chamfer(self, data):
+        """Add chamfer (beveled edges) to a body.
+        Required: body_name (str), distance (float in cm).
+        Optional: edge_indices (list of int) to chamfer specific edges, otherwise all edges."""
+        if data is None or "body_name" not in data or "distance" not in data:
+            return self.runner.return_failure("add_chamfer requires body_name and distance")
+        body_name = str(data["body_name"])
+        distance = float(data["distance"])
+        if distance <= 0:
+            return self.runner.return_failure("chamfer distance must be > 0")
+
+        body, bid = self._find_body_by_name(body_name)
+        if body is None:
+            return self.runner.return_failure(f"body '{body_name}' not found")
+
+        edge_infos, all_edges = self._collect_edges_for_body(body)
+        if all_edges.count == 0:
+            return self.runner.return_failure("body has no edges")
+
+        edge_indices = data.get("edge_indices")
+        edges_to_chamfer = adsk.core.ObjectCollection.create()
+        if edge_indices and isinstance(edge_indices, list):
+            for idx in edge_indices:
+                idx = int(idx)
+                if 0 <= idx < body.edges.count:
+                    edges_to_chamfer.add(body.edges.item(idx))
+            if edges_to_chamfer.count == 0:
+                return self.runner.return_failure("no valid edge indices provided")
+        else:
+            edges_to_chamfer = all_edges
+
+        try:
+            comp = self.design_state.reconstruction.component
+            chamfers = comp.features.chamferFeatures
+            chamfer_input = chamfers.createInput(edges_to_chamfer, True)
+            chamfer_input.setToEqualDistance(adsk.core.ValueInput.createByReal(distance))
+            chamfer = chamfers.add(chamfer_input)
+            return self.runner.return_success({
+                "feature_name": str(getattr(chamfer, "name", "")),
+                "body": bid,
+                "distance": distance,
+                "edges_chamfered": edges_to_chamfer.count,
+            })
+        except Exception as ex:
+            return self.runner.return_failure(f"chamfer failed: {ex}")
+
+    def add_shell(self, data):
+        """Shell a body (hollow it out), removing specified face(s).
+        Required: body_name (str), thickness (float in cm).
+        Optional: remove_face ("top"|"bottom"|"none", default "top").
+        "top" = face with highest avg Z; "bottom" = face with lowest avg Z."""
+        if data is None or "body_name" not in data or "thickness" not in data:
+            return self.runner.return_failure("add_shell requires body_name and thickness")
+        body_name = str(data["body_name"])
+        thickness = float(data["thickness"])
+        if thickness <= 0:
+            return self.runner.return_failure("shell thickness must be > 0")
+
+        body, bid = self._find_body_by_name(body_name)
+        if body is None:
+            return self.runner.return_failure(f"body '{body_name}' not found")
+
+        remove_which = str(data.get("remove_face", "top")).lower()
+
+        # Find the face to remove
+        faces_to_remove = adsk.core.ObjectCollection.create()
+        if remove_which != "none" and body.faces.count > 0:
+            best_face = None
+            best_z = None
+            for i in range(body.faces.count):
+                face = body.faces.item(i)
+                try:
+                    # Compute average Z of face vertices
+                    bbox = face.boundingBox
+                    avg_z = (bbox.minPoint.z + bbox.maxPoint.z) / 2
+                    if remove_which == "top":
+                        if best_z is None or avg_z > best_z:
+                            best_z = avg_z
+                            best_face = face
+                    elif remove_which == "bottom":
+                        if best_z is None or avg_z < best_z:
+                            best_z = avg_z
+                            best_face = face
+                except Exception:
+                    continue
+            if best_face is not None:
+                faces_to_remove.add(best_face)
+
+        try:
+            comp = self.design_state.reconstruction.component
+            shells = comp.features.shellFeatures
+            shell_input = shells.createInput(faces_to_remove, False)
+            shell_input.insideThickness = adsk.core.ValueInput.createByReal(thickness)
+            shell = shells.add(shell_input)
+            return self.runner.return_success({
+                "feature_name": str(getattr(shell, "name", "")),
+                "body": bid,
+                "thickness": thickness,
+                "faces_removed": faces_to_remove.count,
+            })
+        except Exception as ex:
+            return self.runner.return_failure(f"shell failed: {ex}")
+
+    def get_edges_by_body(self, data):
+        """Get edge info for a specific body (indices + endpoint positions)."""
+        if data is None or "body_name" not in data:
+            return self.runner.return_failure("body_name required")
+        body_name = str(data["body_name"])
+        body, bid = self._find_body_by_name(body_name)
+        if body is None:
+            return self.runner.return_failure(f"body '{body_name}' not found")
+        edge_infos, _ = self._collect_edges_for_body(body)
+        return self.runner.return_success({
+            "body": bid,
+            "edge_count": len(edge_infos),
+            "edges": edge_infos[:50],  # Limit to 50 edges to avoid huge responses
+            "source_kind": "exact_fusion_api",
+        })
